@@ -216,6 +216,20 @@ All 43 tests should pass in under a second. Run this before every commit that to
 - Accept code that introduces a new dependency without asking why
 - Accept code that logs secrets or tokens
 
+### Git usage
+- Use plain `git` commands only — never `gh`, `hub`, or any other Git wrapper.
+- No PRs, issues, or remote operations from the CLI. All GitHub interaction happens through the web UI.
+
+### Running Python
+- Always activate the virtualenv before running any Python or pip command:
+  ```bash
+  cd backend
+  source venv/bin/activate
+  python ...
+  ```
+- Never use `python3`, `pip3`, or a system Python directly — only the venv.
+- Never install packages with `--break-system-packages` or outside the venv.
+
 ### Commit message style
 - Describe **what changed and why** — not test outcomes, run counts, or pass/fail results.
 - Never include phrases like "all X tests passing", "tests pass", or "verified working" in commit messages. That belongs in PR descriptions or comments, not in the permanent git history.
