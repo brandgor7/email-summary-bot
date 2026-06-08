@@ -83,11 +83,12 @@ class TestEmailMessage(unittest.TestCase):
 
 
 class TestRegistry(unittest.TestCase):
-    def test_source_providers_is_empty_in_phase_0(self) -> None:
-        self.assertIsInstance(SOURCE_PROVIDERS, dict)
-        self.assertEqual(len(SOURCE_PROVIDERS), 0)
+    def test_outlook_registered_in_source_providers(self) -> None:
+        from services.sources.outlook import OutlookSource
+        self.assertIn("outlook", SOURCE_PROVIDERS)
+        self.assertIsInstance(SOURCE_PROVIDERS["outlook"], OutlookSource)
 
-    def test_destination_providers_is_empty_in_phase_0(self) -> None:
+    def test_destination_providers_is_empty_until_phase_4(self) -> None:
         self.assertIsInstance(DESTINATION_PROVIDERS, dict)
         self.assertEqual(len(DESTINATION_PROVIDERS), 0)
 
