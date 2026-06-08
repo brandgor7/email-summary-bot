@@ -1,0 +1,15 @@
+on:
+  schedule:
+    - cron: '0 7 * * *'   # 7am UTC — morning digest
+    - cron: '0 17 * * *'  # 5pm UTC — evening digest
+  workflow_dispatch:        # Manual trigger from Actions UI
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger digest run
+        run: |
+          curl -X POST ${{ secrets.BACKEND_URL }}/digest/run \
+            -H "X-Cron-Secret: ${{ secrets.CRON_SECRET }}" \
+            --fail --max-time 10
