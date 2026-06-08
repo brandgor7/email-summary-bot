@@ -231,6 +231,15 @@ async def get_all_source_tokens_for_user(user_id: str) -> list[aiosqlite.Row]:
             return await cursor.fetchall()
 
 
+async def get_all_destination_configs_for_user(user_id: str) -> list[aiosqlite.Row]:
+    """Fetch all destination config rows for a user."""
+    async with get_db() as db:
+        async with db.execute(
+            "SELECT * FROM destination_config WHERE user_id = ?", [user_id]
+        ) as cursor:
+            return await cursor.fetchall()
+
+
 async def get_enabled_users_for_schedule(schedule_slot: str) -> list[aiosqlite.Row]:
     """Fetch all enabled users whose schedule matches the given slot ('morning', 'evening', 'both')."""
     async with get_db() as db:
