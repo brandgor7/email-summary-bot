@@ -537,7 +537,7 @@ curl -X POST http://localhost:8000/digest/preview \
 
 ---
 
-## Phase 5 — Scheduled Digest (Days 13–14)
+## Phase 5 — Scheduled Digest (Days 13–14) ✅ IMPLEMENTED
 
 ### Goals
 Wire up the cron-triggered full pipeline. Every user's configured sources
@@ -585,16 +585,34 @@ jobs:
    - `BACKEND_URL=https://api.yourdomain.com`
    - `CRON_SECRET=<same as in server .env>`
 
+### Implemented (committed in `phase-5-scheduled-digest` branch)
+- `backend/routers/digest.py` — `POST /digest/run`: validates `X-Cron-Secret`, returns
+  `202 Accepted`, enqueues `_run_digest_for_all_users` as a `BackgroundTask`
+- `_run_digest_for_all_users(schedule_slot)` — queries `get_enabled_users_for_schedule`,
+  processes each user via `_process_single_user`, isolates per-user errors
+- `_process_single_user(user_id, run_at)` — fetches from all configured sources, merges
+  and deduplicates emails by id, summarizes merged list with Claude, delivers to all
+  destinations; logs one `digest_runs` row per source/destination pair; updates `last_run_at`
+  on success (not on summarizer failure); null `last_run_at` defaults to 24h lookback
+- `_determine_schedule_slot()` — returns `'morning'` (UTC hour < 12) or `'evening'` (≥ 12)
+- `backend/db.py` — added `get_all_destination_configs_for_user`
+- `backend/tests/test_digest_run.py` — 25 unit tests covering cron auth (403/202),
+  schedule slot detection, per-user processing (empty inbox, source fetch failure,
+  summarizer failure, destination failure, cross-source dedup, null last_run_at),
+  and multi-user isolation
+- `.github/workflows/digest.yml` — already in place from Phase 0 (cron + workflow_dispatch)
+
 ### ✅ Verification
-- `POST /digest/run` with correct secret returns `202` within 1 second — message arrives on Telegram shortly after
-- Wrong/missing secret returns `403` immediately
-- Manual trigger via GitHub Actions UI (workflow_dispatch) works end-to-end
-- Scheduled runs fire at correct UTC times (check Actions tab after 24h; expect up to ~30 min delay)
-- `digest_runs` records each run: status, email count, tokens used
-- A user with `enabled=0` is skipped entirely
-- A user with no new emails since `last_run_at` gets no Telegram message
-- Simulate one user's source failing (revoke their token) — other users unaffected
-- A user with `last_run_at = NULL` gets their first digest without error
+- ✅ Wrong/missing secret returns `403` immediately
+- ✅ Correct secret returns `202` with `{"status": "accepted", "schedule_slot": ...}`
+- ✅ `digest_runs` records each run: status, email count, tokens used
+- ✅ A user with `enabled=0` is skipped (via `get_enabled_users_for_schedule`)
+- ✅ A user with no new emails since `last_run_at` gets no Telegram message, "empty" run logged
+- ✅ Source fetch failure for user A does not affect user B
+- ✅ A user with `last_run_at = NULL` gets 24h lookback without error
+- ✅ Emails with the same id from multiple sources are deduplicated before summarization
+- ⬜ Manual trigger via GitHub Actions UI (workflow_dispatch) — requires live server and secrets
+- ⬜ Scheduled runs fire at correct UTC times — check Actions tab after 24h
 
 ---
 

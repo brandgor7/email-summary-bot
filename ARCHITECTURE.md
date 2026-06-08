@@ -584,6 +584,17 @@ HTTP response is returned. This keeps the curl well within the timeout regardles
 user count, and means a GitHub Actions failure always indicates a real problem (bad secret,
 server down) rather than a slow run.
 
+**Background task logic** (`_run_digest_for_all_users`):
+1. Determines schedule slot (`'morning'` if UTC hour < 12, else `'evening'`)
+2. Queries all users with `enabled=1` and a matching schedule
+3. For each user, calls `_process_single_user` — errors are fully isolated per user:
+   - Fetches from all connected sources; deduplicates emails by id across sources
+   - If no new emails: logs `'empty'` in `digest_runs`, updates `last_run_at`
+   - Summarizes merged email list with Claude (one call regardless of source count)
+   - Delivers to all connected destinations; logs one `digest_runs` row per (source, destination) pair
+   - Updates `last_run_at` after successful delivery; skips update if summarization fails (retry next run)
+   - `last_run_at = NULL` (new user) defaults to fetching the past 24 hours
+
 **GitHub Actions cron delay:** GH Actions cron is subject to delays of up to 15–30 minutes
 during high load periods. This is acceptable for a morning/evening digest, but should be
 understood as a best-effort schedule, not a precise one. If exact delivery timing becomes
