@@ -22,5 +22,8 @@ async def auth_callback(source: str, code: str, user: dict = Depends(get_current
     provider = SOURCE_PROVIDERS.get(source)
     if not provider:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Unknown source: {source}")
-    await provider.handle_callback(user["sub"], code)
+    try:
+        await provider.handle_callback(user["sub"], code)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
     return {"status": "connected"}

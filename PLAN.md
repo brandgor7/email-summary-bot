@@ -300,11 +300,20 @@ echo "Deployed at $(date)"
 
 ---
 
-## Phase 2 — Email Fetch: Outlook Source (Days 4–6)
+## Phase 2 — Email Fetch: Outlook Source (Days 4–6) ✅ IMPLEMENTED
 
 ### Goals
 Implement the Outlook source provider. This is the first concrete implementation
 of the `EmailSource` interface.
+
+### Implemented (committed in `phase-2-outlook-source` branch)
+- `backend/services/sources/outlook.py` — full `OutlookSource` implementation:
+  `get_auth_url`, `handle_callback`, `fetch_emails` (with auto-refresh), `revoke`
+- `backend/services/registry.py` — `OutlookSource` registered as `"outlook"`
+- `backend/routers/auth.py` — error handling added (`RuntimeError` → HTTP 502)
+- `backend/tests/test_outlook.py` — 24 unit tests covering auth URL generation,
+  callback token storage and encryption, email mapping, auto-refresh, error handling,
+  and revoke
 
 ### Steps
 
