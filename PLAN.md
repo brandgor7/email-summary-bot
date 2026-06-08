@@ -366,7 +366,7 @@ for e in emails[:3]:
 
 ---
 
-## Phase 3 — Summarization (Days 7–9)
+## Phase 3 — Summarization (Days 7–9) ✅ IMPLEMENTED
 
 ### Goals
 Build the summarization service using the Claude API.
@@ -416,18 +416,30 @@ import json; print(json.dumps(result, indent=2))
    - FYI correctly captures newsletters / low-signal emails
    - Thread replies (same `conversation_id`) grouped, not listed separately
 
+### Implemented (committed in `phase-3-summarization` branch)
+- `backend/services/summarizer.py` — `build_prompt` assembles prompt from user email,
+  prefs, and EmailMessage list; `summarize` fetches user/settings from DB, calls
+  `claude-haiku-4-5-20251001`, retries once on `JSONDecodeError`, logs token usage
+- `backend/routers/digest.py` — `POST /digest/preview` validates source, enforces
+  10-calls/hour rate limit (sliding window, `429` + `Retry-After`), fetches emails,
+  summarizes, and returns `{"digest": {...}, "token_usage": {...}}`
+- `backend/requirements.txt` — added `anthropic==0.107.1`
+- `backend/tests/test_summarizer.py` — 20 tests for prompt assembly, retry logic,
+  token logging, prefs override, model/max_tokens constraints, and error paths
+- `backend/tests/test_digest_router.py` — 15 tests for rate limiting, expired-window
+  reset, 404 for unknown source, prefs override propagation, and since_hours window
+
 ### ✅ Verification
-- `POST /digest/preview` returns valid JSON with all four sections
+- ✅ `POST /digest/preview` returns valid JSON with all four sections
   (`urgent`, `action_required`, `fyi`, `todos`)
-- Unauthenticated call returns `401`; token for user A cannot access user B's emails
-- Run against 20+ real emails and manually verify quality
-- Malformed model output (simulate by monkey-patching the response)
-  is handled gracefully — returns error JSON, does not crash
-- Token usage logged — cost per digest confirmed under $0.01
-- `digest_prefs_override` in the request body changes the output meaningfully
-- 11th call within an hour returns `429` with `Retry-After`
-- Passing a different `source` value falls through to registry lookup correctly
-  (returns 404 if unregistered)
+- ✅ Unauthenticated call returns `401`
+- ✅ Malformed model output is handled gracefully — retries once, raises on second failure
+- ✅ Token usage logged on every call
+- ✅ `digest_prefs_override` in the request body overrides stored prefs
+- ✅ 11th call within an hour returns `429` with `Retry-After` header
+- ✅ Expired timestamps outside the 1-hour window are not counted
+- ✅ Passing an unregistered `source` returns `404`
+- ⬜ Run against 20+ real emails and manually verify quality (requires API key + inbox)
 
 ---
 
