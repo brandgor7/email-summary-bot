@@ -15,7 +15,7 @@
 
 ---
 
-## Phase 0 — Project Setup & Repo Structure (Day 1)
+## Phase 0 — Project Setup & Repo Structure (Day 1) ✅ IMPLEMENTED
 
 ### Goals
 Initialize the repo, directory structure, provider abstractions, and local dev environment.
@@ -120,15 +120,31 @@ node_modules/
 *.db
 ```
 
-### ✅ Verification
-- `uvicorn main:app --reload` starts without errors
-- `GET http://localhost:8000/health` returns `{"status": "ok"}`
-- `sqlite3 dev.sqlite ".tables"` shows all tables including `telegram_link_codes`
-- Next.js dev server starts: `npm run dev`
-- `from services.sources.base import EmailSource` imports without error
-- `from services.destinations.base import DigestDestination` imports without error
-- `from dependencies import get_current_user` imports without error
-- A request to any protected route without a token returns `401`
+### ✅ Verification (all confirmed)
+- ✅ `uvicorn main:app --reload` starts without errors
+- ✅ `GET http://localhost:8000/health` returns `{"status": "ok"}`
+- ✅ `sqlite3 dev.sqlite ".tables"` shows all tables including `telegram_link_codes`
+- ⬜ Next.js dev server starts: `npm run dev` (frontend scaffold deferred to Phase 6)
+- ✅ `from services.sources.base import EmailSource` imports without error
+- ✅ `from services.destinations.base import DigestDestination` imports without error
+- ✅ `from dependencies import get_current_user` imports without error
+- ✅ A request to any protected route without a token returns `401`
+
+### Implemented (committed in `phase-0-project-setup` branch)
+- `backend/dependencies.py` — `get_current_user` JWT auth dependency
+- `backend/routers/` — auth, digest, destinations, users (stub routes)
+- `backend/services/sources/base.py` — `EmailSource` ABC + `EmailMessage` dataclass
+- `backend/services/sources/outlook.py` — placeholder (Phase 2)
+- `backend/services/destinations/base.py` — `DigestDestination` ABC
+- `backend/services/destinations/telegram.py` — placeholder (Phase 4)
+- `backend/services/summarizer.py` — placeholder (Phase 3)
+- `backend/services/token_store.py` — AES-256 encrypt/decrypt helpers
+- `backend/services/registry.py` — empty SOURCE_PROVIDERS + DESTINATION_PROVIDERS dicts
+- `backend/models.py` — Pydantic request/response schemas
+- `backend/db.py` — aiosqlite connection + all query functions
+- `backend/venv/` + `dev.sqlite` — local dev environment (not committed)
+- `.github/workflows/digest.yml` — GitHub Actions cron trigger
+- `scripts/test_fetch.py`, `scripts/test_summarize.py` — manual test scripts
 
 ---
 
