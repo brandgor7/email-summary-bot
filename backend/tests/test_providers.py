@@ -88,9 +88,10 @@ class TestRegistry(unittest.TestCase):
         self.assertIn("outlook", SOURCE_PROVIDERS)
         self.assertIsInstance(SOURCE_PROVIDERS["outlook"], OutlookSource)
 
-    def test_destination_providers_is_empty_until_phase_4(self) -> None:
-        self.assertIsInstance(DESTINATION_PROVIDERS, dict)
-        self.assertEqual(len(DESTINATION_PROVIDERS), 0)
+    def test_telegram_registered_in_destination_providers(self) -> None:
+        from services.destinations.telegram import TelegramDestination
+        self.assertIn("telegram", DESTINATION_PROVIDERS)
+        self.assertIsInstance(DESTINATION_PROVIDERS["telegram"], TelegramDestination)
 
 
 if __name__ == "__main__":
