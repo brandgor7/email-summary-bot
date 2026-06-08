@@ -20,6 +20,37 @@ _DEFAULT_PREFS = (
     "otherwise group by sender domain."
 )
 
+# Edit this constant to change the prompt sent to Claude.
+# {{user_email}}, {{digest_prefs}}, and {{emails_json}} are substituted at runtime.
+_PROMPT_TEMPLATE = """\
+You are an intelligent email digest assistant for {{user_email}}.
+
+USER PREFERENCES:
+{{digest_prefs}}
+
+Given the following emails (JSON), produce a structured digest with:
+1. URGENT — emails needing action today (sorted by urgency)
+2. ACTION REQUIRED — emails needing a response but not urgent
+3. FYI — informational, no action needed
+4. TODO LIST — a deduplicated list of action items the user needs to take
+
+For each email include:
+- Subject and sender
+- One-sentence summary
+- Why it's in this category
+- Suggested reply or action (if applicable)
+
+Output ONLY valid JSON matching this schema:
+{
+  "urgent": [{"subject": "str", "sender": "str", "summary": "str", "reason": "str", "suggested_action": "str"}],
+  "action_required": [{"subject": "str", "sender": "str", "summary": "str", "reason": "str", "suggested_action": "str"}],
+  "fyi": [{"subject": "str", "sender": "str", "summary": "str"}],
+  "todos": [{"item": "str", "source_email": "str"}]
+}
+
+Emails:
+{{emails_json}}"""
+
 
 def build_prompt(user_email: str, digest_prefs: str, emails: list[EmailMessage]) -> str:
     """Assemble the Claude prompt from user prefs and email list."""
@@ -40,28 +71,10 @@ def build_prompt(user_email: str, digest_prefs: str, emails: list[EmailMessage])
     emails_json = json.dumps(emails_data, indent=2)
 
     return (
-        f"You are an intelligent email digest assistant for {user_email}.\n\n"
-        f"USER PREFERENCES:\n{digest_prefs}\n\n"
-        "Given the following emails (JSON), produce a structured digest with:\n"
-        "1. URGENT — emails needing action today (sorted by urgency)\n"
-        "2. ACTION REQUIRED — emails needing a response but not urgent\n"
-        "3. FYI — informational, no action needed\n"
-        "4. TODO LIST — a deduplicated list of action items the user needs to take\n\n"
-        "For each email include:\n"
-        "- Subject and sender\n"
-        "- One-sentence summary\n"
-        "- Why it's in this category\n"
-        "- Suggested reply or action (if applicable)\n\n"
-        "Output ONLY valid JSON matching this schema:\n"
-        '{\n'
-        '  "urgent": [{"subject": "str", "sender": "str", "summary": "str",'
-        ' "reason": "str", "suggested_action": "str"}],\n'
-        '  "action_required": [{"subject": "str", "sender": "str", "summary": "str",'
-        ' "reason": "str", "suggested_action": "str"}],\n'
-        '  "fyi": [{"subject": "str", "sender": "str", "summary": "str"}],\n'
-        '  "todos": [{"item": "str", "source_email": "str"}]\n'
-        '}\n\n'
-        f"Emails:\n{emails_json}"
+        _PROMPT_TEMPLATE
+        .replace("{{user_email}}", user_email)
+        .replace("{{digest_prefs}}", digest_prefs)
+        .replace("{{emails_json}}", emails_json)
     )
 
 
