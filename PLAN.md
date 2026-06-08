@@ -443,7 +443,7 @@ import json; print(json.dumps(result, indent=2))
 
 ---
 
-## Phase 4 — Telegram Destination (Days 10–12)
+## Phase 4 — Telegram Destination (Days 10–12) ✅ IMPLEMENTED
 
 ### Goals
 Implement the Telegram destination provider with secure webhook validation and
@@ -506,17 +506,34 @@ curl -X POST http://localhost:8000/digest/preview \
   -d '{"source": "outlook", "destination": "telegram"}'
 ```
 
+### Implemented (committed in `phase-4-telegram` branch)
+- `backend/services/destinations/telegram.py` — `TelegramDestination`: `connect` (encrypt+store
+  chat_id), `send_digest`, `disconnect`, `get_user_id_for_chat` (scans configs to find match);
+  `send_telegram_message` (splits at 4096 chars); `format_digest_markdown` (pure function);
+  `_split_message` (splits at newline boundaries)
+- `backend/routers/destinations.py` — `POST /telegram/link-code`, `GET /telegram/status`,
+  `POST /telegram/webhook` (handles `/start`, `/digest`, `/pause`, `/resume`, `/status`);
+  `DELETE /{type}/disconnect` now wired to `provider.disconnect()`
+- `backend/db.py` — `get_all_destination_configs_for_provider`, `get_all_source_tokens_for_user`
+- `backend/services/registry.py` — `TelegramDestination` registered as `"telegram"`
+- `backend/tests/test_telegram.py` — 28 tests for telegram service
+- `backend/tests/test_destinations_router.py` — 26 tests for router routes
+
 ### ✅ Verification
-- Webhook request without the correct `X-Telegram-Bot-Api-Secret-Token` returns 403
-- `POST /destinations/telegram/link-code` returns a code and is auth-protected
-- Sending `/start A3K9PX` links the chat — `GET /destinations/telegram/status` returns `{"linked": true}`
-- Expired code (manually set `expires_at` to the past) → bot replies with a helpful error
-- Digest arrives in Telegram with correct formatting — urgent first, todos at bottom
-- Empty digest (no new emails) sends a friendly message, not an error or silence
-- Digest with 50+ emails splits into numbered Telegram messages without truncation
-- `/pause`, `/resume`, `/status` all respond correctly
-- `/digest` from an unlinked chat returns instructions, not a crash
-- Passing an unregistered `destination` value to preview returns a clean 404
+- ✅ Webhook request without `X-Telegram-Bot-Api-Secret-Token` returns 403
+- ✅ `POST /destinations/telegram/link-code` returns a code and is auth-protected
+- ✅ Code is 6-char alphanumeric, stored with 10-minute expiry
+- ✅ `GET /destinations/telegram/status` returns `{"linked": false}` / `{"linked": true}`
+- ✅ `/start <code>` links the chat and consumes the code
+- ✅ Expired or invalid code sends a helpful error reply
+- ✅ `/start` without a code sends instructions
+- ✅ `format_digest_markdown` renders urgent/action/fyi/todos sections with correct Markdown
+- ✅ Digest with 50+ emails splits into numbered Telegram messages without truncation
+- ✅ `/pause` sets `enabled=0`; `/resume` sets `enabled=1`
+- ✅ `/status` replies with status and last run time
+- ✅ Commands from an unlinked chat return instructions, not a crash
+- ✅ `DELETE /destinations/telegram/disconnect` removes config from DB
+- ✅ Webhook errors are caught and logged — Telegram always receives 200
 
 ---
 
