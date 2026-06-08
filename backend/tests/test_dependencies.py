@@ -21,9 +21,10 @@ def _make_token(payload: dict, secret: str = _TEST_SECRET) -> str:
 
 
 class TestAuthDependency(unittest.TestCase):
-    def setUp(self) -> None:
-        self.client = TestClient(app)
+    @classmethod
+    def setUpClass(cls) -> None:
         os.environ["NEXTAUTH_SECRET"] = _TEST_SECRET
+        cls.client = TestClient(app)
 
     def test_no_token_returns_401(self) -> None:
         response = self.client.get("/users/me/settings")

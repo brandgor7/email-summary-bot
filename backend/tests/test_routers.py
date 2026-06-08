@@ -27,8 +27,9 @@ def _valid_token() -> str:
 class TestRouteProtection(unittest.TestCase):
     """Every user-facing route must return 401 when no token is provided."""
 
-    def setUp(self) -> None:
-        self.client = TestClient(app)
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.client = TestClient(app)
 
     def _assert_401_without_token(self, method: str, path: str) -> None:
         response = self.client.request(method, path)
@@ -59,9 +60,10 @@ class TestRouteProtection(unittest.TestCase):
 class TestUnknownProviders(unittest.TestCase):
     """Routes that look up a provider in the registry return 404 for unknown names."""
 
-    def setUp(self) -> None:
-        self.client = TestClient(app)
-        self.headers = {"Authorization": f"Bearer {_valid_token()}"}
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.client = TestClient(app)
+        cls.headers = {"Authorization": f"Bearer {_valid_token()}"}
 
     def test_unknown_source_get_url_returns_404(self) -> None:
         response = self.client.get("/auth/nonexistent/url", headers=self.headers)
@@ -89,8 +91,9 @@ class TestUnknownProviders(unittest.TestCase):
 class TestCronEndpointNoAuth(unittest.TestCase):
     """/digest/run is not user-authenticated — it uses X-Cron-Secret (Phase 5)."""
 
-    def setUp(self) -> None:
-        self.client = TestClient(app)
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.client = TestClient(app)
 
     def test_digest_run_is_not_jwt_protected(self) -> None:
         # Should not return 401 (will return 501 until Phase 5)

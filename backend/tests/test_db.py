@@ -8,8 +8,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def _apply_schema(db_path: str) -> None:
-    import sqlite3
     import pathlib
+    import sqlite3
     schema = pathlib.Path(
         os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "schema.sql")
     ).read_text()
@@ -20,15 +20,20 @@ def _apply_schema(db_path: str) -> None:
 
 
 class TestDBSchema(unittest.IsolatedAsyncioTestCase):
-    def setUp(self) -> None:
-        self._tmp = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
-        self._db_path = self._tmp.name
-        self._tmp.close()
-        _apply_schema(self._db_path)
-        os.environ["DB_PATH"] = self._db_path
+    # One temp file shared across all tests in this class — created once in setUpClass.
+    _db_path: str = ""
 
-    def tearDown(self) -> None:
-        os.unlink(self._db_path)
+    @classmethod
+    def setUpClass(cls) -> None:
+        tmp = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
+        cls._db_path = tmp.name
+        tmp.close()
+        _apply_schema(cls._db_path)
+        os.environ["DB_PATH"] = cls._db_path
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        os.unlink(cls._db_path)
 
     async def test_all_tables_exist(self) -> None:
         import aiosqlite
@@ -49,10 +54,10 @@ class TestDBSchema(unittest.IsolatedAsyncioTestCase):
 
     async def test_upsert_and_get_user(self) -> None:
         from db import get_user_by_id, upsert_user
-        await upsert_user("user-1", "test@example.com", "2026-01-01T00:00:00Z")
-        row = await get_user_by_id("user-1")
+        await upsert_user("u-get", "get@example.com", "2026-01-01T00:00:00Z")
+        row = await get_user_by_id("u-get")
         self.assertIsNotNone(row)
-        self.assertEqual(row["email"], "test@example.com")
+        self.assertEqual(row["email"], "get@example.com")
 
     async def test_get_user_returns_none_for_unknown(self) -> None:
         from db import get_user_by_id
@@ -61,78 +66,78 @@ class TestDBSchema(unittest.IsolatedAsyncioTestCase):
 
     async def test_upsert_user_is_idempotent(self) -> None:
         from db import get_user_by_id, upsert_user
-        await upsert_user("user-2", "a@a.com", "2026-01-01T00:00:00Z")
-        await upsert_user("user-2", "a@a.com", "2026-01-01T00:00:00Z")  # no error
-        row = await get_user_by_id("user-2")
+        await upsert_user("u-idem", "idem@example.com", "2026-01-01T00:00:00Z")
+        await upsert_user("u-idem", "idem@example.com", "2026-01-01T00:00:00Z")
+        row = await get_user_by_id("u-idem")
         self.assertIsNotNone(row)
 
     async def test_get_source_token_returns_none_when_absent(self) -> None:
         from db import get_source_token
-        row = await get_source_token("user-99", "outlook")
+        row = await get_source_token("u-absent", "outlook")
         self.assertIsNone(row)
 
     async def test_upsert_and_get_source_token(self) -> None:
         from db import get_source_token, upsert_source_token, upsert_user
-        await upsert_user("user-3", "b@b.com", "2026-01-01T00:00:00Z")
+        await upsert_user("u-tok", "tok@example.com", "2026-01-01T00:00:00Z")
         await upsert_source_token(
-            token_id="tok-1",
-            user_id="user-3",
+            token_id="tok-a",
+            user_id="u-tok",
             provider="outlook",
-            provider_email="b@outlook.com",
+            provider_email="tok@outlook.com",
             access_token_enc="enc-access",
             refresh_token_enc="enc-refresh",
             expires_at="2026-12-31T00:00:00Z",
             created_at="2026-01-01T00:00:00Z",
         )
-        row = await get_source_token("user-3", "outlook")
+        row = await get_source_token("u-tok", "outlook")
         self.assertIsNotNone(row)
-        self.assertEqual(row["provider_email"], "b@outlook.com")
+        self.assertEqual(row["provider_email"], "tok@outlook.com")
 
     async def test_delete_source_token(self) -> None:
         from db import delete_source_token, get_source_token, upsert_source_token, upsert_user
-        await upsert_user("user-4", "c@c.com", "2026-01-01T00:00:00Z")
+        await upsert_user("u-del", "del@example.com", "2026-01-01T00:00:00Z")
         await upsert_source_token(
-            token_id="tok-2",
-            user_id="user-4",
+            token_id="tok-b",
+            user_id="u-del",
             provider="outlook",
-            provider_email="c@outlook.com",
+            provider_email="del@outlook.com",
             access_token_enc="enc",
             refresh_token_enc="enc",
             expires_at="2026-12-31T00:00:00Z",
             created_at="2026-01-01T00:00:00Z",
         )
-        await delete_source_token("user-4", "outlook")
-        row = await get_source_token("user-4", "outlook")
+        await delete_source_token("u-del", "outlook")
+        row = await get_source_token("u-del", "outlook")
         self.assertIsNone(row)
 
     async def test_upsert_and_get_digest_settings(self) -> None:
         from db import get_digest_settings, upsert_digest_settings, upsert_user
-        await upsert_user("user-5", "d@d.com", "2026-01-01T00:00:00Z")
-        await upsert_digest_settings("user-5")
-        row = await get_digest_settings("user-5")
+        await upsert_user("u-ds", "ds@example.com", "2026-01-01T00:00:00Z")
+        await upsert_digest_settings("u-ds")
+        row = await get_digest_settings("u-ds")
         self.assertIsNotNone(row)
         self.assertEqual(row["schedule"], "morning")
         self.assertEqual(row["enabled"], 1)
 
     async def test_telegram_link_code_insert_and_fetch(self) -> None:
         from db import get_telegram_link_code, insert_telegram_link_code, upsert_user
-        await upsert_user("user-6", "e@e.com", "2026-01-01T00:00:00Z")
+        await upsert_user("u-tg", "tg@example.com", "2026-01-01T00:00:00Z")
         await insert_telegram_link_code(
             code="A1B2C3",
-            user_id="user-6",
+            user_id="u-tg",
             created_at="2026-01-01T00:00:00Z",
             expires_at="2026-01-01T00:10:00Z",
         )
         row = await get_telegram_link_code("A1B2C3")
         self.assertIsNotNone(row)
-        self.assertEqual(row["user_id"], "user-6")
+        self.assertEqual(row["user_id"], "u-tg")
 
     async def test_telegram_link_code_delete(self) -> None:
         from db import delete_telegram_link_code, get_telegram_link_code, insert_telegram_link_code, upsert_user
-        await upsert_user("user-7", "f@f.com", "2026-01-01T00:00:00Z")
+        await upsert_user("u-tgd", "tgd@example.com", "2026-01-01T00:00:00Z")
         await insert_telegram_link_code(
             code="X9Y8Z7",
-            user_id="user-7",
+            user_id="u-tgd",
             created_at="2026-01-01T00:00:00Z",
             expires_at="2026-01-01T00:10:00Z",
         )

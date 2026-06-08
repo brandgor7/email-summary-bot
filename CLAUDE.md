@@ -184,6 +184,22 @@ Treat changes to it with care:
   - Cron secret is enforced
   - Empty inbox produces a graceful result
 
+### Running the unit tests
+
+```bash
+cd backend
+source venv/bin/activate
+python -m unittest discover -s tests -v
+```
+
+All 43 tests should pass in under a second. Run this before every commit that touches backend code.
+
+### Test conventions
+- Tests live in `backend/tests/`. One file per module under test (`test_db.py`, `test_routers.py`, etc.).
+- Use `setUpClass` (not `setUp`) to create expensive fixtures — `TestClient`, temp DB files — so they are built once per class, not once per test method.
+- Use `unittest.mock.patch` to control env vars in individual tests rather than reloading modules.
+- Async DB tests use `unittest.IsolatedAsyncioTestCase`. Keep the shared temp DB at class level; use distinct IDs per test to avoid state conflicts.
+
 ---
 
 ## When Asking Claude for Help
@@ -199,6 +215,11 @@ Treat changes to it with care:
 - Trust generated SQL without reading it — always verify parameterization
 - Accept code that introduces a new dependency without asking why
 - Accept code that logs secrets or tokens
+
+### Commit message style
+- Describe **what changed and why** — not test outcomes, run counts, or pass/fail results.
+- Never include phrases like "all X tests passing", "tests pass", or "verified working" in commit messages. That belongs in PR descriptions or comments, not in the permanent git history.
+- Focus on the content of the change: what was added, removed, or fixed, and the reason.
 
 ### Prompt tips for this project
 - "Here is `services/summarizer.py`. The model is sometimes returning malformed JSON.
