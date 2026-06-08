@@ -29,6 +29,7 @@ so the pattern is locked in from the start.
 email-summary-bot/
   backend/
     main.py
+    dependencies.py       # get_current_user FastAPI dependency (JWT auth)
     routers/
       auth.py             # /auth/{source}/url + callback (generic)
       digest.py           # /digest/preview + /digest/run
@@ -47,6 +48,7 @@ email-summary-bot/
     models.py             # Pydantic request/response schemas
     db.py                 # SQLite connection + all query functions
     schema.sql            # DB schema — run once on deploy
+    migrations/           # Numbered SQL files for post-deploy schema changes
     requirements.txt
     .env.example
   frontend/               # Next.js app (Phase 6)
@@ -74,31 +76,39 @@ email-summary-bot/
 3. **Create provider registry** (`services/registry.py`) with empty dicts.
    Implementations are registered here as they are built.
 
-4. **Initialize backend:**
+4. **Implement `get_current_user` dependency** (`dependencies.py`):
+   - Reads `Authorization: Bearer <token>` from the request header
+   - Validates the JWT signature using `NEXTAUTH_SECRET` from env
+   - Raises `401` if missing, expired, or invalid
+   - Returns the decoded payload (includes `user_id`)
+   - All user-facing routes will use `user = Depends(get_current_user)`
+   - `user_id` is always read from the token payload — never from the request body
+
+5. **Initialize backend:**
 ```bash
 cd backend
 python3.11 -m venv venv
 source venv/bin/activate
-pip install fastapi uvicorn httpx python-dotenv cryptography aiosqlite pydantic
+pip install fastapi uvicorn httpx python-dotenv cryptography aiosqlite pydantic pyjwt
 pip freeze > requirements.txt
 ```
 
-5. **Initialize frontend:**
+6. **Initialize frontend:**
 ```bash
 cd frontend
 npx create-next-app@latest . --typescript --tailwind --app
 npm install next-auth axios
 ```
 
-6. **Create local SQLite DB:**
+7. **Create local SQLite DB:**
 ```bash
 sqlite3 ./backend/dev.sqlite < backend/schema.sql
-sqlite3 ./backend/dev.sqlite ".tables"   # confirm all 5 tables exist
+sqlite3 ./backend/dev.sqlite ".tables"   # confirm all tables exist
 ```
 
-7. **Set `DB_PATH=./dev.sqlite`** in local `.env`. All other vars can be blank for now.
+8. **Set `DB_PATH=./dev.sqlite`** in local `.env`. All other vars can be blank for now.
 
-8. **Create `.gitignore`:**
+9. **Create `.gitignore`:**
 ```
 .env
 *.env.local
@@ -113,10 +123,12 @@ node_modules/
 ### ✅ Verification
 - `uvicorn main:app --reload` starts without errors
 - `GET http://localhost:8000/health` returns `{"status": "ok"}`
-- `sqlite3 dev.sqlite ".tables"` shows: `users source_tokens destination_config digest_settings digest_runs`
+- `sqlite3 dev.sqlite ".tables"` shows all tables including `telegram_link_codes`
 - Next.js dev server starts: `npm run dev`
 - `from services.sources.base import EmailSource` imports without error
 - `from services.destinations.base import DigestDestination` imports without error
+- `from dependencies import get_current_user` imports without error
+- A request to any protected route without a token returns `401`
 
 ---
 
@@ -182,8 +194,12 @@ pip install -r requirements.txt
 cp .env.example .env
 nano .env
 # Set DB_PATH=/var/lib/email-summary-bot/db.sqlite
-# Generate keys: openssl rand -hex 32  (TOKEN_ENCRYPTION_KEY)
-#                openssl rand -hex 24  (CRON_SECRET)
+# Generate keys:
+#   openssl rand -hex 32  → TOKEN_ENCRYPTION_KEY
+#   openssl rand -hex 24  → CRON_SECRET
+#   openssl rand -hex 24  → ADMIN_SECRET
+#   openssl rand -hex 24  → TELEGRAM_WEBHOOK_SECRET
+# Set NEXTAUTH_SECRET to the same value used in Vercel
 ```
 
 9. **Initialize production DB:**
@@ -234,6 +250,9 @@ cd backend
 source venv/bin/activate
 pip install -r requirements.txt -q
 sudo systemctl restart email-summary-bot
+sleep 3
+systemctl is-active --quiet email-summary-bot || { echo "Service failed to start"; exit 1; }
+curl -sf http://localhost:8000/health || { echo "Health check failed"; exit 1; }
 echo "Deployed at $(date)"
 ```
 
@@ -246,6 +265,7 @@ echo "Deployed at $(date)"
 - Manual backup: `sudo -u appuser /usr/local/bin/backup-db.sh`
   → file appears in S3 bucket
 - `journalctl -u email-summary-bot -f` shows uvicorn startup logs
+- `scripts/deploy.sh` runs cleanly and prints "Deployed at ..." — not a silent failure
 
 ---
 
@@ -269,6 +289,7 @@ of the `EmailSource` interface.
    - `get_auth_url(user_id)` — builds Microsoft OAuth consent URL
    - `handle_callback(user_id, code)` — exchanges code, encrypts tokens, stores in `source_tokens`
    - `fetch_emails(user_id, since)` — calls MS Graph, maps response to `EmailMessage` list
+     - If `since` is `None` (new user, first run), default to `datetime.utcnow() - timedelta(hours=24)`
    - `revoke(user_id)` — deletes row from `source_tokens`
    - Auto-refresh: before each fetch, check `expires_at` and refresh if needed
 
@@ -281,11 +302,12 @@ SOURCE_PROVIDERS = {"outlook": OutlookSource()}
 4. **Implement generic auth router** `routers/auth.py`:
    - `GET /auth/{source}/url` — looks up provider in registry, returns auth URL
    - `POST /auth/{source}/callback` — looks up provider, calls `handle_callback`
+   - Both routes require `user = Depends(get_current_user)` — `user_id` comes from the token
 
 5. **Test script** `scripts/test_fetch.py`:
 ```python
 # Complete OAuth flow in browser, then:
-emails = await SOURCE_PROVIDERS["outlook"].fetch_emails("test-user-id", since=yesterday)
+emails = await SOURCE_PROVIDERS["outlook"].fetch_emails("test-user-id", since=None)
 print(f"Fetched {len(emails)} emails")
 for e in emails[:3]:
     print(e)
@@ -299,6 +321,8 @@ for e in emails[:3]:
 - Token refresh works: set `expires_at` to a past value in DB, re-run fetch,
   confirm it auto-refreshes and updates the DB
 - `revoke()` removes the row — confirmed with sqlite3
+- Passing `since=None` returns ~24h of emails, not an error
+- Unauthenticated call to `/auth/outlook/url` returns `401`
 
 ---
 
@@ -321,25 +345,32 @@ The summarizer is source-agnostic: it receives `list[EmailMessage]` regardless o
 
 3. **Implement `POST /digest/preview`** in `routers/digest.py`:
 ```
+Requires: user = Depends(get_current_user)  # user_id from token, never from body
+
 Request body:
-  user_id: str
   source: str = "outlook"          # which source provider to fetch from
   since_hours: int = 24            # lookback window
   digest_prefs_override: str | None  # if set, use instead of DB prefs
 
 Steps:
-  1. Fetch emails via SOURCE_PROVIDERS[source].fetch_emails(...)
+  1. Fetch emails via SOURCE_PROVIDERS[source].fetch_emails(user.id, since=...)
   2. Summarize with Claude (use override prefs if provided)
   3. Return structured JSON + token_usage metadata
 ```
 
-4. **Test script** `scripts/test_summarize.py`:
+4. **Rate limiting on `/digest/preview`:**
+   - Track per-user call counts with an in-process sliding window (simple dict + timestamp list)
+   - Limit: 10 calls per user per hour
+   - Return `429 Too Many Requests` with a `Retry-After` header when exceeded
+   - This prevents runaway Claude API cost from repeated manual runs
+
+5. **Test script** `scripts/test_summarize.py`:
 ```python
 result = await summarize_for_user("test-user-id", source="outlook")
 import json; print(json.dumps(result, indent=2))
 ```
 
-5. **Iterate on prompt quality:**
+6. **Iterate on prompt quality:**
    - Urgency classification feels right
    - Todos are real action items (not noise)
    - FYI correctly captures newsletters / low-signal emails
@@ -348,20 +379,23 @@ import json; print(json.dumps(result, indent=2))
 ### ✅ Verification
 - `POST /digest/preview` returns valid JSON with all four sections
   (`urgent`, `action_required`, `fyi`, `todos`)
+- Unauthenticated call returns `401`; token for user A cannot access user B's emails
 - Run against 20+ real emails and manually verify quality
 - Malformed model output (simulate by monkey-patching the response)
   is handled gracefully — returns error JSON, does not crash
 - Token usage logged — cost per digest confirmed under $0.01
 - `digest_prefs_override` in the request body changes the output meaningfully
+- 11th call within an hour returns `429` with `Retry-After`
 - Passing a different `source` value falls through to registry lookup correctly
   (returns 404 if unregistered)
 
 ---
 
-## Phase 4 — Telegram Destination (Days 10–11)
+## Phase 4 — Telegram Destination (Days 10–12)
 
 ### Goals
-Implement the Telegram destination provider — the first concrete `DigestDestination`.
+Implement the Telegram destination provider with secure webhook validation and
+a one-time code linking mechanism to tie Telegram chats to app users.
 
 ### Steps
 
@@ -369,9 +403,11 @@ Implement the Telegram destination provider — the first concrete `DigestDestin
    - Message `@BotFather` → `/newbot`
    - Copy bot token to `.env`
 
-2. **Register webhook** (Telegram pushes events to your server):
+2. **Register webhook with a secret token:**
 ```bash
-curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://api.yourdomain.com/destinations/telegram/webhook"
+curl "https://api.telegram.org/bot<TOKEN>/setWebhook \
+  ?url=https://api.yourdomain.com/destinations/telegram/webhook \
+  &secret_token=<TELEGRAM_WEBHOOK_SECRET>"
 ```
 
 3. **Implement `services/destinations/telegram.py`** — `TelegramDestination(DigestDestination)`:
@@ -387,53 +423,72 @@ from services.destinations.telegram import TelegramDestination
 DESTINATION_PROVIDERS = {"telegram": TelegramDestination()}
 ```
 
-5. **Implement `POST /destinations/telegram/webhook`** in `routers/destinations.py`:
-   - `/start` → call `connect()`, store `chat_id`, send welcome message
-   - `/digest` → fetch + summarize + send for the requesting user
-   - `/pause` / `/resume` → toggle `enabled` in `digest_settings`
-   - `/status` → reply with last run time and email count
+5. **Implement one-time code linking:**
 
-6. **Connect delivery to preview:**
-   - Add `destination: str | None` param to `POST /digest/preview`
-   - If set, call `DESTINATION_PROVIDERS[destination].send_digest(...)` after summarizing
+   a. `POST /destinations/telegram/link-code` (requires auth):
+      - Generate a 6-char alphanumeric code (e.g. `A3K9PX`)
+      - Insert into `telegram_link_codes` with `expires_at = now + 10 minutes`
+      - Return `{"code": "A3K9PX", "bot_username": "@YourBot"}`
+      - Frontend displays: "Send `/start A3K9PX` to @YourBot"
+
+   b. `GET /destinations/telegram/status` (requires auth):
+      - Return `{"linked": true/false}` — frontend polls this to detect when linking completes
+
+6. **Implement `POST /destinations/telegram/webhook`** in `routers/destinations.py`:
+   - **First: validate `X-Telegram-Bot-Api-Secret-Token` header** — return 403 immediately if wrong
+   - `/start <code>`:
+     - Look up `code` in `telegram_link_codes` — return friendly error if missing or expired
+     - Link `chat_id` to the `user_id` from the code row: call `connect()`
+     - Delete the used code row
+     - Reply: "✅ Connected! You'll receive your digests here."
+   - `/digest` — fetch + summarize + send for the linked user
+   - `/pause` / `/resume` — toggle `enabled` in `digest_settings`
+   - `/status` — reply with last run time and email count
+   - All commands except `/start` require a linked `chat_id` — reply with instructions if not linked
 
 7. **End-to-end test:**
 ```bash
 curl -X POST http://localhost:8000/digest/preview \
+  -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
-  -d '{"user_id": "test", "source": "outlook", "destination": "telegram"}'
+  -d '{"source": "outlook", "destination": "telegram"}'
 ```
 
 ### ✅ Verification
-- `/start` to the bot stores `chat_id` in `destination_config` (verify with sqlite3)
+- Webhook request without the correct `X-Telegram-Bot-Api-Secret-Token` returns 403
+- `POST /destinations/telegram/link-code` returns a code and is auth-protected
+- Sending `/start A3K9PX` links the chat — `GET /destinations/telegram/status` returns `{"linked": true}`
+- Expired code (manually set `expires_at` to the past) → bot replies with a helpful error
 - Digest arrives in Telegram with correct formatting — urgent first, todos at bottom
 - Empty digest (no new emails) sends a friendly message, not an error or silence
 - Digest with 50+ emails splits into numbered Telegram messages without truncation
 - `/pause`, `/resume`, `/status` all respond correctly
-- Passing an unregistered `destination` value returns a clean 404
+- `/digest` from an unlinked chat returns instructions, not a crash
+- Passing an unregistered `destination` value to preview returns a clean 404
 
 ---
 
-## Phase 5 — Scheduled Digest (Days 12–13)
+## Phase 5 — Scheduled Digest (Days 13–14)
 
 ### Goals
 Wire up the cron-triggered full pipeline. Every user's configured sources
-and destinations run automatically on schedule.
+and destinations run automatically on schedule. The endpoint returns immediately
+and processes users in the background.
 
 ### Steps
 
 1. **Implement `POST /digest/run`** in `routers/digest.py`:
-   - Validate `X-Cron-Secret` header — return 403 immediately if wrong
-   - Query all users with `enabled=1` and schedule matching current UTC slot
-   - For each user:
-     - For each connected source in `source_tokens`: fetch emails since `last_run_at`
-     - Merge and deduplicate emails across sources (by `id`)
-     - Summarize merged list
-     - For each connected destination in `destination_config`: send digest
-     - Update `last_run_at` in `digest_settings`
-     - Log to `digest_runs` (one row per source/destination pair)
-   - Each user's failure is isolated — a Graph API error for user A must not
-     prevent user B from getting their digest
+   - Validate `X-Cron-Secret` header — return `403` immediately if wrong
+   - Enqueue processing as a FastAPI `BackgroundTask` and return `202 Accepted` immediately
+   - The background task:
+     - Queries all users with `enabled=1` and schedule matching current UTC slot
+     - For each user (failures are isolated — user A's error must not affect user B):
+       - For each connected source in `source_tokens`: fetch emails since `last_run_at`
+       - Merge and deduplicate emails across sources (by `id`)
+       - Summarize merged list
+       - For each connected destination in `destination_config`: send digest
+       - Update `last_run_at` in `digest_settings`
+       - Log to `digest_runs` (one row per source/destination pair)
 
 2. **GitHub Actions workflow** `.github/workflows/digest.yml`:
 ```yaml
@@ -451,26 +506,30 @@ jobs:
         run: |
           curl -X POST ${{ secrets.BACKEND_URL }}/digest/run \
             -H "X-Cron-Secret: ${{ secrets.CRON_SECRET }}" \
-            --fail --max-time 30
+            --fail --max-time 10
 ```
+
+   The curl completes in well under 10 seconds because the endpoint returns 202
+   before any digest processing begins.
 
 3. **Add secrets to GitHub repo** (Settings → Secrets → Actions):
    - `BACKEND_URL=https://api.yourdomain.com`
    - `CRON_SECRET=<same as in server .env>`
 
 ### ✅ Verification
-- `POST /digest/run` with correct secret triggers digest — message arrives on Telegram
-- Wrong/missing secret returns 403 immediately
+- `POST /digest/run` with correct secret returns `202` within 1 second — message arrives on Telegram shortly after
+- Wrong/missing secret returns `403` immediately
 - Manual trigger via GitHub Actions UI (workflow_dispatch) works end-to-end
-- Scheduled runs fire at correct UTC times (check Actions tab after 24h)
+- Scheduled runs fire at correct UTC times (check Actions tab after 24h; expect up to ~30 min delay)
 - `digest_runs` records each run: status, email count, tokens used
 - A user with `enabled=0` is skipped entirely
 - A user with no new emails since `last_run_at` gets no Telegram message
 - Simulate one user's source failing (revoke their token) — other users unaffected
+- A user with `last_run_at = NULL` gets their first digest without error
 
 ---
 
-## Phase 6 — Frontend: Onboarding & Settings (Days 14–18)
+## Phase 6 — Frontend: Onboarding & Settings (Days 15–19)
 
 ### Goals
 Build the web UI so users can self-onboard and manage their settings
@@ -479,15 +538,18 @@ without touching code or the database.
 ### Steps
 
 1. **NextAuth.js setup** — email magic link (Resend free tier):
-   - Session stored as JWT, passed as `Authorization: Bearer` to backend
-   - Backend validates JWT on all `/users/me/*` routes
+   - Session stored as JWT signed with `NEXTAUTH_SECRET`
+   - `lib/api.ts` attaches `Authorization: Bearer <token>` to all backend calls
+   - Backend validates JWT on all `/users/me/*` and `/auth/*` routes
 
 2. **Onboarding wizard** `/onboard` — 3 steps:
    - Step 1: "Connect your email" — shows available sources from `SOURCE_PROVIDERS` keys;
      clicking "Connect Outlook" redirects to `/auth/outlook/url`
    - Step 2: "Connect your destination" — shows available destinations from
-     `DESTINATION_PROVIDERS` keys; clicking "Connect Telegram" shows bot instructions
-     and polls for `chat_id` confirmation
+     `DESTINATION_PROVIDERS` keys; clicking "Connect Telegram":
+     - Calls `POST /destinations/telegram/link-code`
+     - Displays the code and instructs the user to send `/start <code>` to the bot
+     - Polls `GET /destinations/telegram/status` every 3 seconds until `linked: true`
    - Step 3: "Customize your digest" — textarea for `digest_prefs`, schedule picker
 
    The UI reads available providers dynamically via `GET /providers` so adding
@@ -500,7 +562,7 @@ without touching code or the database.
    - Change schedule / pause / resume
 
 4. **Backend endpoints:**
-   - `GET /providers` — return lists of registered source and destination provider keys
+   - `GET /providers` — return lists of registered source and destination provider keys (no auth required)
    - `GET /users/me/settings`
    - `PUT /users/me/settings`
    - `DELETE /users/me/sources/{provider}` — calls `revoke()`, removes row
@@ -509,11 +571,12 @@ without touching code or the database.
 5. **Deploy frontend to Vercel:**
 ```bash
 cd frontend && npx vercel
-# Set NEXT_PUBLIC_API_URL and NEXTAUTH_* in Vercel dashboard
+# Set NEXT_PUBLIC_API_URL, NEXTAUTH_SECRET, NEXTAUTH_URL in Vercel dashboard
 ```
 
 ### ✅ Verification
 - New user completes full onboarding without any technical knowledge
+- Telegram linking: code appears in UI, user sends `/start <code>`, status updates to linked
 - Settings changes persist — confirmed by reading back from DB
 - A second independent user can onboard — both receive separate, correct digests
 - Disconnecting Outlook calls `revoke()` and removes tokens from `source_tokens`
@@ -523,7 +586,7 @@ cd frontend && npx vercel
 
 ---
 
-## Phase 7 — Frontend: Preview & Prompt Tuning (Days 19–21)
+## Phase 7 — Frontend: Preview & Prompt Tuning (Days 20–22)
 
 ### Goals
 Let users run the digest on demand in the browser, see the result,
@@ -540,6 +603,7 @@ edit the prompt, and re-run. This is the core UX for tuning digest quality.
      - Collapsible sections: Urgent / Action Required / FYI / Todos
      - Each email: subject, sender, one-line summary, suggested action
    - Token usage + estimated cost shown below result
+   - Show remaining preview calls if near the rate limit (10/hour)
 
 2. **Prompt editor panel:**
    - Textarea pre-filled with current `digest_prefs`
@@ -555,10 +619,11 @@ edit the prompt, and re-run. This is the core UX for tuning digest quality.
 - Token count and cost shown match Anthropic console usage
 - Page is usable on mobile (Tailwind responsive layout)
 - Source picker correctly shows only providers the user has connected
+- UI shows a clear message (not a crash) when rate limit is hit
 
 ---
 
-## Phase 8 — Hardening & Polish (Days 22–26)
+## Phase 8 — Hardening & Polish (Days 23–27)
 
 ### Goals
 Make the system reliable enough to run unattended for weeks.
@@ -575,19 +640,24 @@ Make the system reliable enough to run unattended for weeks.
 
 2. **Safety caps:**
    - Max 100 emails per digest per source (fetch top 100 by recency, note truncation in digest)
-   - Max 300 chars of `bodyPreview` per email sent to LLM
+   - Max 255 chars of `bodyPreview` per email sent to LLM (MS Graph limit — no truncation needed)
    - Telegram: split messages at 4096 chars, label as "Part 1/2" etc.
 
 3. **Observability:**
-   - `GET /admin/stats` (protected by cron secret) — runs per user, avg token cost, error rate
+   - `GET /admin/stats` (protected by `X-Admin-Secret` header, not the cron secret) —
+     runs per user, avg token cost, error rate
    - All application logs to stdout → visible via `journalctl -u email-summary-bot`
 
-4. **Auto-renewal verification:**
+4. **Clean up expired Telegram link codes:**
+   - Add a periodic cleanup (e.g. on every `/digest/run` trigger) to delete rows from
+     `telegram_link_codes` where `expires_at < now`
+
+5. **Auto-renewal verification:**
 ```bash
 sudo certbot renew --dry-run
 ```
 
-5. **README.md** — complete setup guide covering: Azure app registration,
+6. **README.md** — complete setup guide covering: Azure app registration,
    Lightsail configuration, Vercel deploy, all env vars, and first user onboarding.
    Target: a new developer can set up the full stack in under 30 minutes.
 
@@ -597,7 +667,8 @@ sudo certbot renew --dry-run
 - Simulate Claude timeout: set 1s timeout temporarily →
   error logged, run continues for next user
 - 50-email digest splits correctly across multiple Telegram messages
-- `GET /admin/stats` returns accurate run counts and error rates
+- `GET /admin/stats` with correct `X-Admin-Secret` returns accurate data; wrong secret returns 403
+- `GET /admin/stats` with correct `CRON_SECRET` (wrong header) returns 403
 - `sudo certbot renew --dry-run` succeeds
 - Developer following README alone sets up full stack in < 30 minutes
 
@@ -607,15 +678,15 @@ sudo certbot renew --dry-run
 
 | Phase | Focus | Duration |
 |---|---|---|
-| 0 | Project setup, provider abstractions | Day 1 |
+| 0 | Project setup, provider abstractions, JWT auth middleware | Day 1 |
 | 1 | Lightsail infra: nginx, TLS, systemd, S3 backup | Days 2–3 |
 | 2 | Outlook source provider | Days 4–6 |
-| 3 | Summarization + prompt tuning | Days 7–9 |
-| 4 | Telegram destination provider + bot commands | Days 10–11 |
-| 5 | Scheduled digest (cron) | Days 12–13 |
-| 6 | Frontend: onboarding + settings | Days 14–18 |
-| 7 | Frontend: preview + prompt tuning | Days 19–21 |
-| 8 | Hardening + polish | Days 22–26 |
+| 3 | Summarization + rate limiting + prompt tuning | Days 7–9 |
+| 4 | Telegram destination + webhook security + linking | Days 10–12 |
+| 5 | Scheduled digest (async cron) | Days 13–14 |
+| 6 | Frontend: onboarding + settings | Days 15–19 |
+| 7 | Frontend: preview + prompt tuning | Days 20–22 |
+| 8 | Hardening + polish | Days 23–27 |
 
 **Total: ~4 weeks** for a production-ready v1.
 
@@ -650,3 +721,5 @@ No changes to the scheduler, summarizer, database schema, or frontend logic.
 - **Read-only filter:** Option to digest only unread emails — add as a setting in Phase 6.
 - **Digest history:** Store and browse past digests in the UI — v2 feature.
 - **Litestream:** Continuous WAL replication to S3 — worth it if digest history is stored.
+- **Rate limiting persistence:** Current in-process rate limiter resets on service restart.
+  For strict enforcement, move to a DB-backed counter or use a library like `slowapi`.

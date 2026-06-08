@@ -23,7 +23,7 @@ only new provider implementations are needed.
 │   /settings  Manage connections, digest prefs, schedule         │
 │   /preview   On-demand summarize → render in-browser, tune      │
 └─────────────────────────────┬────────────────────────────────────┘
-                              │ HTTPS (REST)
+                              │ HTTPS (REST) + Authorization: Bearer <JWT>
 ┌─────────────────────────────▼────────────────────────────────────┐
 │               BACKEND (FastAPI) + DATABASE (SQLite)              │
 │                    AWS Lightsail — single VPS                    │
@@ -86,7 +86,7 @@ class EmailMessage:
     subject: str
     sender_name: str
     sender_email: str
-    body_preview: str          # First ~300 chars — what's sent to LLM by default
+    body_preview: str          # First ~255 chars — MS Graph API limit; what's sent to LLM by default
     received_at: datetime
     is_read: bool
     conversation_id: str | None = None
@@ -210,6 +210,7 @@ handled backend-side.
 ```
 backend/
   main.py
+  dependencies.py    # get_current_user — FastAPI dependency for JWT auth
   routers/
     auth.py           # /auth/{source}/url and /auth/{source}/callback
     digest.py         # /digest/preview and /digest/run
@@ -231,7 +232,52 @@ backend/
   models.py           # Pydantic request/response schemas
   db.py               # SQLite connection + all query functions
   schema.sql          # DB schema — run once on first deploy
+  migrations/         # Numbered SQL files for schema changes after initial deploy
+    001_example.sql
 ```
+
+---
+
+### Backend Authentication
+
+The backend validates every request that touches user data using a `get_current_user`
+FastAPI dependency. The frontend (NextAuth.js) issues a JWT signed with `NEXTAUTH_SECRET`.
+The backend validates that signature using the same secret.
+
+```python
+# dependencies.py
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+import jwt
+
+security = HTTPBearer()
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+) -> dict:
+    """Validate NextAuth JWT and return the user payload."""
+    try:
+        payload = jwt.decode(
+            credentials.credentials,
+            settings.NEXTAUTH_SECRET,
+            algorithms=["HS256"],
+        )
+        return payload
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+```
+
+All routes that handle user data take `user = Depends(get_current_user)`. The `user_id`
+is always derived from the validated token — never accepted as a request body field.
+
+**`NEXTAUTH_SECRET` must be set in the backend `.env`** (same value as the Vercel
+environment variable). It is the shared secret used to verify token signatures.
+
+The `/digest/run` (cron trigger) and `/destinations/telegram/webhook` (Telegram push)
+routes are not user-authenticated — they use the cron secret and Telegram webhook
+secret respectively (see Security Considerations).
 
 ---
 
@@ -284,10 +330,10 @@ CREATE TABLE destination_config (
 -- Digest preferences and schedule per user
 CREATE TABLE digest_settings (
   user_id       TEXT PRIMARY KEY REFERENCES users(id),
-  digest_prefs  TEXT NOT NULL,                -- Free-text LLM prompt instructions
+  digest_prefs  TEXT NOT NULL DEFAULT 'Flag as urgent if someone is waiting on my response or there is a deadline mentioned. Create a todo if I owe someone something or have an action item. Group emails by inferred project or topic if you can determine one; otherwise group by sender domain.',
   schedule      TEXT NOT NULL DEFAULT 'morning',  -- 'morning' | 'evening' | 'both'
   enabled       INTEGER NOT NULL DEFAULT 1,
-  last_run_at   TEXT,
+  last_run_at   TEXT,                         -- NULL for new users; treated as 24h ago on first run
   last_email_id TEXT                          -- For dedup across runs
 );
 
@@ -303,7 +349,21 @@ CREATE TABLE digest_runs (
   error_msg    TEXT,
   tokens_used  INTEGER
 );
+
+-- Short-lived codes for linking a Telegram chat_id to an app user
+-- Created when user clicks "Connect Telegram"; consumed when /start <code> is received
+CREATE TABLE telegram_link_codes (
+  code       TEXT PRIMARY KEY,               -- 6-char alphanumeric, e.g. 'A3K9PX'
+  user_id    TEXT NOT NULL REFERENCES users(id),
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL                   -- 10 minutes after created_at
+);
 ```
+
+**DB migration strategy:** Schema changes after initial deploy go in numbered SQL files
+under `migrations/`. Run them manually on the server with `sqlite3 <db> < migrations/NNN_description.sql`
+and record which migrations have been applied. This is lightweight and sufficient for a
+single-server deployment.
 
 ---
 
@@ -414,22 +474,60 @@ GET https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages
   &$orderby=receivedDateTime desc
 ```
 
-Only `bodyPreview` (first ~255 chars) is sent to the LLM by default.
-Full body is an opt-in setting stored in `digest_settings`.
+`bodyPreview` contains the first ~255 characters (MS Graph API limit). Only this preview
+is sent to the LLM by default; full body is an opt-in setting stored in `digest_settings`.
+
+**`last_run_at` NULL handling:** For new users whose `last_run_at` is NULL (first run),
+the fetch defaults to emails from the past 24 hours. The `fetch_emails` implementation
+must handle a `None` value for `since` by substituting `datetime.utcnow() - timedelta(hours=24)`.
 
 ---
 
 ### Destination: Telegram
 
-**Setup per user:**
-1. User messages `@YourBot` with `/start`
-2. Telegram POSTs to `POST /destinations/telegram/webhook`
-3. Backend captures `chat_id`, encrypts and stores in `destination_config`
+**Setup per user — one-time code linking:**
+
+The web UI and the Telegram bot need to agree on which app user a given `chat_id`
+belongs to. This is solved with a short-lived one-time code:
+
+1. User clicks "Connect Telegram" on the frontend (`/onboard` or `/settings`)
+2. Frontend calls `POST /destinations/telegram/link-code`
+3. Backend generates a 6-char alphanumeric code (e.g. `A3K9PX`), stores it in
+   `telegram_link_codes` with a 10-minute expiry, returns it
+4. Frontend shows: **"Open Telegram and send `/start A3K9PX` to @YourBot"**
+5. User sends the message → Telegram POSTs to `/destinations/telegram/webhook`
+6. Backend reads the code from the message text, looks up `telegram_link_codes`,
+   finds the `user_id`, stores the `chat_id` encrypted in `destination_config`,
+   deletes the code row
+7. Frontend polls `GET /destinations/telegram/status` until linking is confirmed
+
+Codes expire after 10 minutes. If a code is missing or expired, the bot replies
+with a message directing the user back to the web app to generate a new one.
+
+**Webhook security:**
+
+The Telegram webhook endpoint (`POST /destinations/telegram/webhook`) is public but
+must reject requests that don't come from Telegram. Register the webhook with a secret
+token and validate it on every request:
+
+```bash
+# Register webhook with secret token
+curl "https://api.telegram.org/bot<TOKEN>/setWebhook \
+  ?url=https://api.yourdomain.com/destinations/telegram/webhook \
+  &secret_token=<TELEGRAM_WEBHOOK_SECRET>"
+```
+
+```python
+# In the webhook handler — reject if header is missing or wrong
+X-Telegram-Bot-Api-Secret-Token: <TELEGRAM_WEBHOOK_SECRET>
+```
+
+`TELEGRAM_WEBHOOK_SECRET` is a random value (e.g. `openssl rand -hex 24`) stored in `.env`.
 
 **Supported bot commands:**
 | Command | Action |
 |---|---|
-| `/start` | Register chat, show welcome message |
+| `/start <code>` | Link this chat to the app user identified by `code` |
 | `/digest` | Trigger an immediate digest |
 | `/pause` | Pause scheduled digests |
 | `/resume` | Resume scheduled digests |
@@ -476,11 +574,20 @@ jobs:
         run: |
           curl -X POST ${{ secrets.BACKEND_URL }}/digest/run \
             -H "X-Cron-Secret: ${{ secrets.CRON_SECRET }}" \
-            --fail --max-time 30
+            --fail --max-time 10
 ```
 
-The backend validates `X-Cron-Secret` and runs digests for all eligible users,
-iterating over each user's configured sources and destinations.
+**`POST /digest/run` is async:** The endpoint validates the secret, enqueues the work
+as a FastAPI background task, and immediately returns `202 Accepted`. The actual digest
+processing (fetch → summarize → send, for each user) runs in the background after the
+HTTP response is returned. This keeps the curl well within the timeout regardless of
+user count, and means a GitHub Actions failure always indicates a real problem (bad secret,
+server down) rather than a slow run.
+
+**GitHub Actions cron delay:** GH Actions cron is subject to delays of up to 15–30 minutes
+during high load periods. This is acceptable for a morning/evening digest, but should be
+understood as a best-effort schedule, not a precise one. If exact delivery timing becomes
+important, replace with a Lightsail cron (same server, no external dependency).
 
 ---
 
@@ -530,6 +637,22 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
+**Deploy script** (`scripts/deploy.sh`):
+```bash
+#!/bin/bash
+set -e
+cd /home/appuser/email-summary-bot
+git pull origin main
+cd backend
+source venv/bin/activate
+pip install -r requirements.txt -q
+sudo systemctl restart email-summary-bot
+sleep 3
+systemctl is-active --quiet email-summary-bot || { echo "Service failed to start"; exit 1; }
+curl -sf http://localhost:8000/health || { echo "Health check failed"; exit 1; }
+echo "Deployed at $(date)"
+```
+
 ---
 
 ## Security Considerations
@@ -537,11 +660,19 @@ WantedBy=multi-user.target
 - **Token encryption:** All OAuth tokens (source and destination) encrypted with AES-256
   (`cryptography.fernet`) before storage. Encryption key in `.env`, never in DB or repo.
 - **Cron auth:** `X-Cron-Secret` header on `/digest/run` — returns 403 if missing/wrong.
-- **No full email body by default:** Only `bodyPreview` sent to LLM.
+- **JWT auth:** All user-facing routes use `get_current_user` (validates NextAuth JWT).
+  `user_id` is always derived from the token — never accepted from the request body.
+- **Telegram webhook auth:** `X-Telegram-Bot-Api-Secret-Token` validated on every
+  webhook request — returns 403 if missing/wrong.
+- **No full email body by default:** Only `bodyPreview` (≤255 chars) sent to LLM.
+- **Rate limiting on preview:** `POST /digest/preview` is limited to 10 calls per user
+  per hour to prevent runaway Claude API cost. Enforced via in-process sliding window.
 - **HTTPS:** nginx + Certbot handles TLS. Port 80 redirects to 443.
 - **Firewall:** Lightsail firewall: ports 22, 80, 443 only.
 - **DB permissions:** SQLite file owned by `appuser`, mode `600`.
 - **Secrets:** All in `.env` on server only. Never committed. `.env.example` documents required vars.
+- **Admin stats:** `GET /admin/stats` is protected by a separate `ADMIN_SECRET` header
+  (not the cron secret) so admin access and cron access can be revoked independently.
 
 ---
 
@@ -552,6 +683,8 @@ WantedBy=multi-user.target
 DB_PATH=/var/lib/email-summary-bot/db.sqlite
 TOKEN_ENCRYPTION_KEY=...        # 32-byte hex: openssl rand -hex 32
 CRON_SECRET=...                 # Random secret: openssl rand -hex 24
+ADMIN_SECRET=...                # Separate secret for /admin/stats: openssl rand -hex 24
+NEXTAUTH_SECRET=...             # Same value as Vercel NEXTAUTH_SECRET — used to validate JWTs
 ANTHROPIC_API_KEY=sk-ant-...
 FRONTEND_URL=https://your-app.vercel.app
 
@@ -562,6 +695,7 @@ MS_REDIRECT_URI=https://api.yourdomain.com/auth/outlook/callback
 
 # Telegram
 TELEGRAM_BOT_TOKEN=...
+TELEGRAM_WEBHOOK_SECRET=...     # Random secret: openssl rand -hex 24
 
 # Future sources/destinations — add here as implemented
 # GOOGLE_CLIENT_ID=...
