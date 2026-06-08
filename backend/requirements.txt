@@ -6,3 +6,4 @@ cryptography==44.0.0
 aiosqlite==0.20.0
 pydantic==2.10.3
 PyJWT==2.10.1
+anthropic==0.107.1
