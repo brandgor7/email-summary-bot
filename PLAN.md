@@ -132,11 +132,26 @@ node_modules/
 
 ---
 
-## Phase 1 — Infra: Lightsail Server Setup (Days 2–3)
+## Phase 1 — Infra: Lightsail Server Setup (Days 2–3) ✅ IMPLEMENTED
 
 ### Goals
 Configure the Lightsail instance as a production-ready host before any application
 code is deployed. Getting infra right early means deployment is never a blocker.
+
+### Implemented (committed in `phase-1-infra` branch)
+- `infra/nginx.conf` — reverse proxy config (TLS + HTTP→HTTPS redirect)
+- `infra/email-summary-bot.service` — systemd unit for uvicorn
+- `scripts/backup-db.sh` — S3 backup via `sqlite3 .backup`
+- `scripts/deploy.sh` — git pull + pip install + systemctl restart + health check
+- `backend/.env.example` — all required env vars documented
+- `backend/schema.sql` — full DB schema (all tables)
+- `backend/main.py` — minimal FastAPI app with `/health` endpoint
+- `backend/requirements.txt` — pinned dependencies
+- `.gitignore`
+
+### Remaining manual steps (run on Lightsail server)
+Steps 1–12 and the S3 bucket/lifecycle setup are server-side operations.
+See step-by-step commands in the Steps section below.
 
 ### Steps
 
