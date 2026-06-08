@@ -4,13 +4,11 @@ from typing import AsyncGenerator
 
 import aiosqlite
 
-_db_path: str = os.getenv("DB_PATH", "./dev.sqlite")
-
-
 @asynccontextmanager
 async def get_db() -> AsyncGenerator[aiosqlite.Connection, None]:
     """Yield an aiosqlite connection with row_factory set to aiosqlite.Row."""
-    async with aiosqlite.connect(_db_path) as conn:
+    db_path = os.getenv("DB_PATH", "./dev.sqlite")
+    async with aiosqlite.connect(db_path) as conn:
         conn.row_factory = aiosqlite.Row
         await conn.execute("PRAGMA foreign_keys = ON")
         yield conn
