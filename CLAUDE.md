@@ -230,6 +230,11 @@ All 43 tests should pass in under a second. Run this before every commit that to
 - Never use `python3`, `pip3`, or a system Python directly — only the venv.
 - Never install packages with `--break-system-packages` or outside the venv.
 
+### Running Node.js / npm (frontend)
+- npm is already local by default — no activation needed, just `cd frontend`.
+- `npm test` runs the TypeScript type check. Run before every commit that touches frontend code.
+- Use `npm run <script>` for all commands — never rely on globally installed packages.
+
 ### Commit message style
 - Describe **what changed and why** — not test outcomes, run counts, or pass/fail results.
 - Never include phrases like "all X tests passing", "tests pass", or "verified working" in commit messages. That belongs in PR descriptions or comments, not in the permanent git history.

@@ -31,13 +31,19 @@ only new provider implementations are needed.
 │   FastAPI served via uvicorn, fronted by nginx (TLS)            │
 │   SQLite file on local disk — no network DB required            │
 │                                                                  │
-│   POST /auth/{source}/callback    OAuth callback (any source)   │
+│   GET  /auth/{source}/callback    OAuth browser redirect        │
+│   POST /auth/{source}/callback    OAuth callback (API client)   │
 │   GET  /auth/{source}/url         OAuth consent URL             │
 │   POST /destinations/{type}/connect  Connect a destination      │
 │   POST /digest/preview            On-demand summarize           │
 │   POST /digest/run                Scheduled trigger (cron)      │
+│   GET  /providers                 List registered providers      │
 │   GET  /users/me/settings         Fetch user config             │
 │   PUT  /users/me/settings         Update digest prefs           │
+│   GET  /users/me/sources          List connected sources        │
+│   GET  /users/me/destinations     List connected destinations   │
+│   DELETE /users/me/sources/{p}    Disconnect source             │
+│   DELETE /users/me/destinations/{p}  Disconnect destination     │
 └──────┬───────────────────────────────────────┬───────────────────┘
        │                                       │
 ┌──────▼──────────────────┐      ┌─────────────▼──────────┐
@@ -45,7 +51,7 @@ only new provider implementations are needed.
 │  (pluggable interface)   │      │  claude-haiku-4-5      │
 │                          │      │  Summarization only    │
 │  ✅ MS Graph (Outlook)   │      └────────────────────────┘
-│  🔲 Gmail (Google API)   │
+│  🔲 Gmail (Google API)  │
 │  🔲 IMAP (generic)       │      ┌────────────────────────┐
 └──────────────────────────┘      │  DESTINATION PROVIDERS │
                                   │  (pluggable interface) │
