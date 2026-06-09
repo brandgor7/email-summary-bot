@@ -58,9 +58,9 @@ only new provider implementations are needed.
                                   │  (pluggable interface) │
 ┌─────────────────────────┐       │                        │
 │  SCHEDULER              │       │  ✅ Telegram Bot API   │
-│  GitHub Actions cron    │       │  🔲 MS Teams webhook   │
-│  1–2x/day per user      │       │  🔲 Slack webhook      │
-│  POST /digest/run       │       │  🔲 Email (SES/SMTP)   │
+│  Local cron (Lightsail) │       │  🔲 MS Teams webhook   │
+│  7am + 5pm UTC          │       │  🔲 Slack webhook      │
+│  POST :8000/digest/run  │       │  🔲 Email (SES/SMTP)   │
 └─────────────────────────┘       └────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────────┐
@@ -561,36 +561,53 @@ Messages are split at 4096 chars (Telegram limit) and sent as numbered parts.
 
 ---
 
-### Scheduler — GitHub Actions
+### Scheduler — Local cron (Lightsail)
 
-**Why GitHub Actions:** Free, no extra infra, cron syntax, easy secrets management.
-Scheduling logic lives in the repo, not on the server.
+**Why local cron instead of GitHub Actions:**
+- `CRON_SECRET` is never transmitted over the network — the trigger call stays on the machine
+- Uvicorn binds to `127.0.0.1` only; the cron job calls it directly (port 8000), bypassing nginx
+- No external dependency: the schedule works even when GitHub is unavailable
+- Deterministic timing — system cron fires within seconds of the scheduled time
 
-```yaml
-# .github/workflows/digest.yml
-on:
-  schedule:
-    - cron: '0 7 * * *'    # 7am UTC — morning digest
-    - cron: '0 17 * * *'   # 5pm UTC — evening digest
-  workflow_dispatch:         # Manual trigger from Actions UI
+**Security model for `/digest/run`:**
 
-jobs:
-  trigger:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Trigger digest run
-        run: |
-          curl -X POST ${{ secrets.BACKEND_URL }}/digest/run \
-            -H "X-Cron-Secret: ${{ secrets.CRON_SECRET }}" \
-            --fail --max-time 10
+Three layers of protection:
+1. **Uvicorn bind address** — `uvicorn … --host 127.0.0.1` means port 8000 is not reachable from outside the machine
+2. **Nginx block** — a `location = /digest/run { return 404; }` block ensures requests routed through nginx (port 443) never reach the endpoint
+3. **`CRON_SECRET` header** — the endpoint validates `X-Cron-Secret` on every request; 403 if missing or wrong
+
+**Files:**
+
 ```
+infra/cron/
+  digest-trigger.sh    # Shell script: reads CRON_SECRET from .env, calls localhost:8000/digest/run
+  email-summary-bot    # /etc/cron.d file: 7am and 5pm UTC, runs as appuser
+```
+
+**`infra/cron/digest-trigger.sh`** (installed to `/usr/local/bin/digest-trigger.sh`):
+```bash
+# Reads CRON_SECRET from .env without sourcing the full file — no other
+# secrets are exposed to the shell environment.
+CRON_SECRET=$(grep -E '^CRON_SECRET=' /home/appuser/email-summary-bot/.env | cut -d= -f2- | ...)
+
+curl -s -o /dev/null -w "%{http_code}" \
+    -X POST http://127.0.0.1:8000/digest/run \
+    -H "X-Cron-Secret: $CRON_SECRET" \
+    --max-time 15
+```
+Logs success/failure to syslog via `logger -t email-summary-bot-cron`.
+
+**`/etc/cron.d/email-summary-bot`** (installed from `infra/cron/email-summary-bot`):
+```
+0 7  * * *  appuser  /usr/local/bin/digest-trigger.sh
+0 17 * * *  appuser  /usr/local/bin/digest-trigger.sh
+```
+The file must be owned by root with mode `644` — cron silently ignores files with insecure permissions.
 
 **`POST /digest/run` is async:** The endpoint validates the secret, enqueues the work
 as a FastAPI background task, and immediately returns `202 Accepted`. The actual digest
 processing (fetch → summarize → send, for each user) runs in the background after the
-HTTP response is returned. This keeps the curl well within the timeout regardless of
-user count, and means a GitHub Actions failure always indicates a real problem (bad secret,
-server down) rather than a slow run.
+HTTP response is returned.
 
 **Background task logic** (`_run_digest_for_all_users`):
 1. Determines schedule slot (`'morning'` if UTC hour < 12, else `'evening'`)
@@ -602,11 +619,6 @@ server down) rather than a slow run.
    - Delivers to all connected destinations; logs one `digest_runs` row per (source, destination) pair
    - Updates `last_run_at` after successful delivery; skips update if summarization fails (retry next run)
    - `last_run_at = NULL` (new user) defaults to fetching the past 24 hours
-
-**GitHub Actions cron delay:** GH Actions cron is subject to delays of up to 15–30 minutes
-during high load periods. This is acceptable for a morning/evening digest, but should be
-understood as a best-effort schedule, not a precise one. If exact delivery timing becomes
-important, replace with a Lightsail cron (same server, no external dependency).
 
 ---
 
@@ -623,6 +635,12 @@ server {
 
     ssl_certificate     /etc/letsencrypt/live/api.yourdomain.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/api.yourdomain.com/privkey.pem;
+
+    # Block external access to the cron trigger endpoint — returns 404 to avoid
+    # leaking that the route exists. The cron job bypasses nginx entirely.
+    location = /digest/run {
+        return 404;
+    }
 
     location / {
         proxy_pass         http://127.0.0.1:8000;
@@ -669,6 +687,15 @@ sudo systemctl restart email-summary-bot
 sleep 3
 systemctl is-active --quiet email-summary-bot || { echo "Service failed to start"; exit 1; }
 curl -sf http://localhost:8000/health || { echo "Health check failed"; exit 1; }
+
+# Install/update the cron trigger script and cron.d file.
+sudo cp ../infra/cron/digest-trigger.sh /usr/local/bin/digest-trigger.sh
+sudo chmod 750 /usr/local/bin/digest-trigger.sh
+sudo chown root:appuser /usr/local/bin/digest-trigger.sh
+sudo cp ../infra/cron/email-summary-bot /etc/cron.d/email-summary-bot
+sudo chmod 644 /etc/cron.d/email-summary-bot
+sudo chown root:root /etc/cron.d/email-summary-bot
+
 echo "Deployed at $(date)"
 ```
 
@@ -678,7 +705,7 @@ echo "Deployed at $(date)"
 
 - **Token encryption:** All OAuth tokens (source and destination) encrypted with AES-256
   (`cryptography.fernet`) before storage. Encryption key in `.env`, never in DB or repo.
-- **Cron auth:** `X-Cron-Secret` header on `/digest/run` — returns 403 if missing/wrong.
+- **Cron auth:** Three-layer protection on `POST /digest/run`: (1) uvicorn binds to `127.0.0.1` only so port 8000 is unreachable externally, (2) nginx returns 404 for this path on port 443, (3) `X-Cron-Secret` header validated on every request — 403 if missing/wrong. The `CRON_SECRET` is read directly from `.env` at cron time and never transmitted over the network.
 - **JWT auth:** All user-facing routes use `get_current_user` (validates NextAuth JWT).
   `user_id` is always derived from the token — never accepted from the request body.
 - **Telegram webhook auth:** `X-Telegram-Bot-Api-Secret-Token` validated on every
@@ -738,7 +765,7 @@ NEXTAUTH_URL=https://your-app.vercel.app
 | Database | SQLite (local file) | Same Lightsail instance | $0 |
 | DB Backup | awscli + S3 | AWS S3 (~1 MB/day) | ~$0.01/mo |
 | LLM | Claude Haiku (Anthropic API) | Anthropic | ~$1/mo |
-| Scheduler | GitHub Actions cron | GitHub free | $0 |
+| Scheduler | Local cron (systemd cron) | Lightsail (same machine) | $0 |
 | Source (v1) | MS Graph API (Outlook) | Microsoft | $0 |
 | Destination (v1) | Telegram Bot API | Telegram | $0 |
 | **Total** | | | **~$5/month** |

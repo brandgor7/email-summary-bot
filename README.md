@@ -190,7 +190,7 @@ npm test   # TypeScript type check
 4. Set all env vars in `/home/appuser/email-summary-bot/.env`
 5. Initialize the production DB: `sqlite3 /var/lib/email-summary-bot/db.sqlite < schema.sql`
 6. Start the service: `sudo systemctl enable --now email-summary-bot`
-7. Run `scripts/deploy.sh` for all future deploys
+7. Run `scripts/deploy.sh` for all future deploys (also installs/updates the cron job)
 
 ### Vercel (frontend)
 
@@ -200,16 +200,34 @@ npx vercel
 # Set NEXT_PUBLIC_API_URL, NEXTAUTH_SECRET, NEXTAUTH_URL, RESEND_API_KEY in Vercel dashboard
 ```
 
-### GitHub Actions (scheduler)
+### Cron scheduler (one-time setup on Lightsail)
 
-Add these secrets to your GitHub repo (Settings → Secrets → Actions):
+The digest schedule runs via system cron on the same machine as the backend. No external
+dependencies or GitHub secrets are required. The cron script reads `CRON_SECRET` directly
+from the application `.env` file and calls uvicorn on `127.0.0.1:8000` — the call never
+leaves the machine.
 
-| Secret | Value |
-|---|---|
-| `BACKEND_URL` | `https://api.yourdomain.com` |
-| `CRON_SECRET` | Same value as server `.env` |
+```bash
+# Install the trigger script (requires sudo; run once on first deploy)
+sudo cp infra/cron/digest-trigger.sh /usr/local/bin/digest-trigger.sh
+sudo chmod 750 /usr/local/bin/digest-trigger.sh
+sudo chown root:appuser /usr/local/bin/digest-trigger.sh
 
-The workflow in `.github/workflows/digest.yml` triggers digests at 7am and 5pm UTC.
+# Install the cron schedule (7am and 5pm UTC)
+sudo cp infra/cron/email-summary-bot /etc/cron.d/email-summary-bot
+sudo chmod 644 /etc/cron.d/email-summary-bot
+sudo chown root:root /etc/cron.d/email-summary-bot
+```
+
+After the initial setup, `scripts/deploy.sh` keeps both files in sync automatically
+on every deploy.
+
+To verify the cron job works manually:
+```bash
+sudo -u appuser /usr/local/bin/digest-trigger.sh
+# Digest triggered (HTTP 202)
+# Or check syslog: grep email-summary-bot-cron /var/log/syslog
+```
 
 ---
 
@@ -272,6 +290,7 @@ The workflow in `.github/workflows/digest.yml` triggers digests at 7am and 5pm U
 
 - All OAuth tokens encrypted with AES-256 (Fernet) before DB storage
 - `CRON_SECRET` and `ADMIN_SECRET` are separate so they can be rotated independently
+- `/digest/run` is protected by three layers: uvicorn binds to `127.0.0.1` only, nginx returns 404 for this path, and `CRON_SECRET` is validated on every request — the secret is never transmitted over the network
 - The Telegram webhook validates `X-Telegram-Bot-Api-Secret-Token` on every request
 - Only `bodyPreview` (≤255 chars) is sent to the LLM by default — never full email bodies
 - Rate limiting on `/digest/preview`: 10 calls per user per hour
@@ -299,3 +318,9 @@ The workflow in `.github/workflows/digest.yml` triggers digests at 7am and 5pm U
 - Check `digest_settings.enabled = 1` and schedule matches the cron slot
 - Look for errors in `digest_runs` table: `sqlite3 dev.sqlite "SELECT * FROM digest_runs WHERE status = 'error'"`
 - Run `POST /admin/stats` with `X-Admin-Secret` to see aggregate error rates
+
+**Cron job not firing:**
+- Check syslog: `grep email-summary-bot-cron /var/log/syslog`
+- Verify the cron file permissions: `ls -l /etc/cron.d/email-summary-bot` (must be `644`, owned by `root:root`)
+- Test manually: `sudo -u appuser /usr/local/bin/digest-trigger.sh`
+- Confirm `CRON_SECRET` is set in `/home/appuser/email-summary-bot/.env`
