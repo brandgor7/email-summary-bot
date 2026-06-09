@@ -12,7 +12,7 @@ from dependencies import get_current_user
 from models import PreviewRequest
 from services import summarizer
 from services.registry import DESTINATION_PROVIDERS, SOURCE_PROVIDERS
-from services.sources.base import EmailMessage
+from services.sources.base import EmailMessage, TokenRefreshError
 
 router = APIRouter(prefix="/digest", tags=["digest"])
 logger = logging.getLogger(__name__)
@@ -47,6 +47,31 @@ def _determine_schedule_slot() -> str:
     return "morning" if hour < 12 else "evening"
 
 
+_EMAIL_CAP = 100
+
+
+async def _send_reconnect_notice(
+    user_id: str, provider: str, dest_configs: list
+) -> None:
+    """Send a reconnect notice to all user destinations when a source token expires."""
+    frontend_url = os.getenv("FRONTEND_URL", "")
+    message = (
+        f"⚠️ Your {provider.capitalize()} connection has expired. "
+        f"Please reconnect at {frontend_url}/settings"
+    )
+    for row in dest_configs:
+        dest_provider: str = row["provider"]
+        if dest_provider not in DESTINATION_PROVIDERS:
+            continue
+        try:
+            await DESTINATION_PROVIDERS[dest_provider].send_notification(user_id, message)
+        except Exception as exc:
+            logger.error(
+                "Failed to send reconnect notice user=%s dest=%s: %s",
+                user_id, dest_provider, exc,
+            )
+
+
 async def _process_single_user(user_id: str, run_at: str) -> None:
     """Fetch, summarize, and deliver digest for one user. All errors are isolated."""
     settings = await db.get_digest_settings(user_id)
@@ -60,6 +85,14 @@ async def _process_single_user(user_id: str, run_at: str) -> None:
             since = since.replace(tzinfo=timezone.utc)
     else:
         since = datetime.now(timezone.utc) - timedelta(hours=24)
+
+    dest_configs = await db.get_all_destination_configs_for_user(user_id)
+    active_dests = [
+        r["provider"] for r in dest_configs if r["provider"] in DESTINATION_PROVIDERS
+    ]
+
+    if not active_dests:
+        return
 
     # Fetch from all configured sources; track per-provider email counts
     source_tokens = await db.get_all_source_tokens_for_user(user_id)
@@ -76,6 +109,12 @@ async def _process_single_user(user_id: str, run_at: str) -> None:
             for email in emails:
                 if email.id not in merged:
                     merged[email.id] = email
+        except TokenRefreshError as exc:
+            logger.error(
+                "Token refresh failed user=%s provider=%s: %s", user_id, provider, exc
+            )
+            email_counts[provider] = 0
+            await _send_reconnect_notice(user_id, provider, dest_configs)
         except Exception as exc:
             logger.error("Source fetch failed user=%s provider=%s: %s", user_id, provider, exc)
             email_counts[provider] = 0
@@ -83,15 +122,16 @@ async def _process_single_user(user_id: str, run_at: str) -> None:
     if not email_counts:
         return
 
-    dest_configs = await db.get_all_destination_configs_for_user(user_id)
-    active_dests = [
-        r["provider"] for r in dest_configs if r["provider"] in DESTINATION_PROVIDERS
-    ]
-
-    if not active_dests:
-        return
-
     merged_emails = list(merged.values())
+
+    # Enforce a cap of 100 emails to control prompt size and cost
+    truncated = len(merged_emails) > _EMAIL_CAP
+    if truncated:
+        logger.warning(
+            "Email cap hit user=%s: %d emails, truncating to %d",
+            user_id, len(merged_emails), _EMAIL_CAP,
+        )
+        merged_emails = merged_emails[:_EMAIL_CAP]
 
     if not merged_emails:
         await db.update_last_run(user_id, run_at, None)
@@ -111,7 +151,7 @@ async def _process_single_user(user_id: str, run_at: str) -> None:
         return
 
     try:
-        result = await summarizer.summarize(user_id, merged_emails)
+        result = await summarizer.summarize(user_id, merged_emails, truncated=truncated)
     except Exception as exc:
         logger.error("Summarization failed user=%s: %s", user_id, exc)
         for source_provider, count in email_counts.items():
@@ -164,6 +204,7 @@ async def _process_single_user(user_id: str, run_at: str) -> None:
 async def _run_digest_for_all_users(schedule_slot: str) -> None:
     """Background task: process digest for every enabled user in the given schedule slot."""
     run_at = datetime.now(timezone.utc).isoformat()
+    await db.delete_expired_telegram_link_codes(run_at)
     users = await db.get_enabled_users_for_schedule(schedule_slot)
     for user_row in users:
         user_id: str = user_row["user_id"]

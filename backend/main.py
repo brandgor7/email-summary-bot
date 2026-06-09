@@ -1,10 +1,11 @@
 from fastapi import FastAPI
 
-from routers import auth, destinations, digest, users
+from routers import admin, auth, destinations, digest, users
 from services.registry import DESTINATION_PROVIDERS, SOURCE_PROVIDERS
 
 app = FastAPI(title="email-summary-bot")
 
+app.include_router(admin.router)
 app.include_router(auth.router)
 app.include_router(digest.router)
 app.include_router(destinations.router)

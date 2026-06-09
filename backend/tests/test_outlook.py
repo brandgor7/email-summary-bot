@@ -427,8 +427,9 @@ class TestTokenRefresh(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tok_decrypt(row["access_token_enc"]), "fresh-at")
         self.assertEqual(tok_decrypt(row["refresh_token_enc"]), "fresh-rt")
 
-    async def test_refresh_raises_runtime_error_on_failure(self) -> None:
+    async def test_refresh_raises_token_refresh_error_on_failure(self) -> None:
         import httpx
+        from services.sources.base import TokenRefreshError
         await self._seed_expired_token("u-refresh-fail")
 
         mock = MagicMock()
@@ -437,7 +438,7 @@ class TestTokenRefresh(unittest.IsolatedAsyncioTestCase):
         mock.post = AsyncMock(side_effect=httpx.ConnectError("network down"))
 
         with patch("services.sources.outlook.httpx.AsyncClient", return_value=mock):
-            with self.assertRaises(RuntimeError):
+            with self.assertRaises(TokenRefreshError):
                 await OutlookSource().fetch_emails("u-refresh-fail", since=None)
 
 

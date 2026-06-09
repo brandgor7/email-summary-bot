@@ -1,4 +1,5 @@
 """Claude API summarization service."""
+import asyncio
 import json
 import logging
 import os
@@ -52,7 +53,18 @@ Emails:
 {{emails_json}}"""
 
 
-def build_prompt(user_email: str, digest_prefs: str, emails: list[EmailMessage]) -> str:
+_TRUNCATION_NOTE = (
+    "\n\nNote: Your inbox had more than 100 emails since the last digest. "
+    "Only the 100 most recent emails are included above."
+)
+
+
+def build_prompt(
+    user_email: str,
+    digest_prefs: str,
+    emails: list[EmailMessage],
+    truncated: bool = False,
+) -> str:
     """Assemble the Claude prompt from user prefs and email list."""
     emails_data = [
         {
@@ -70,18 +82,22 @@ def build_prompt(user_email: str, digest_prefs: str, emails: list[EmailMessage])
     ]
     emails_json = json.dumps(emails_data, indent=2)
 
-    return (
+    prompt = (
         _PROMPT_TEMPLATE
         .replace("{{user_email}}", user_email)
         .replace("{{digest_prefs}}", digest_prefs)
         .replace("{{emails_json}}", emails_json)
     )
+    if truncated:
+        prompt += _TRUNCATION_NOTE
+    return prompt
 
 
 async def summarize(
     user_id: str,
     emails: list[EmailMessage],
     digest_prefs_override: str | None = None,
+    truncated: bool = False,
 ) -> dict:
     """Call Claude API with assembled prompt; return parsed digest JSON and token usage."""
     user = await db.get_user_by_id(user_id)
@@ -96,16 +112,18 @@ async def summarize(
     else:
         digest_prefs = _DEFAULT_PREFS
 
-    prompt = build_prompt(user["email"], digest_prefs, emails)
+    prompt = build_prompt(user["email"], digest_prefs, emails, truncated=truncated)
 
     client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
     return await _call_with_retry(client, prompt)
 
 
 async def _call_with_retry(client: anthropic.AsyncAnthropic, prompt: str) -> dict:
-    """Call Claude API and parse JSON response, retrying once on parse failure."""
+    """Call Claude API and parse JSON response, retrying once (with 2s backoff) on parse failure."""
     last_exc: Exception | None = None
     for attempt in range(2):
+        if attempt > 0:
+            await asyncio.sleep(2)
         message = await client.messages.create(
             model=MODEL,
             max_tokens=MAX_TOKENS,

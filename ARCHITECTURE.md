@@ -44,6 +44,7 @@ only new provider implementations are needed.
 │   GET  /users/me/destinations     List connected destinations   │
 │   DELETE /users/me/sources/{p}    Disconnect source             │
 │   DELETE /users/me/destinations/{p}  Disconnect destination     │
+│   GET  /admin/stats               Digest run stats (admin only) │
 └──────┬───────────────────────────────────────┬───────────────────┘
        │                                       │
 ┌──────▼──────────────────┐      ┌─────────────▼──────────┐
@@ -63,7 +64,7 @@ only new provider implementations are needed.
 └─────────────────────────┘       └────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────────┐
-│  BACKUP — AWS S3 + awscli                                        │
+│  BACKUP — AWS S3 + awscli  ·  100-email cap  ·  token-refresh reconnect notices │
 │  Daily cron: sqlite3 .backup → S3 bucket (30-day retention)     │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -218,6 +219,7 @@ backend/
   main.py
   dependencies.py    # get_current_user — FastAPI dependency for JWT auth
   routers/
+    admin.py          # /admin/stats — aggregate run stats (X-Admin-Secret)
     auth.py           # /auth/{source}/url and /auth/{source}/callback
     digest.py         # /digest/preview and /digest/run
     destinations.py   # /destinations/{type}/connect and /disconnect

@@ -38,6 +38,11 @@ class TelegramDestination(DigestDestination):
         """Remove destination config row."""
         await db.delete_destination_config(user_id, "telegram")
 
+    async def send_notification(self, user_id: str, message: str) -> None:
+        """Send a plain text message to the user's linked Telegram chat."""
+        config = await self._load_config(user_id)
+        await send_telegram_message(config["chat_id"], message)
+
     async def get_user_id_for_chat(self, chat_id: int) -> str | None:
         """Return the user_id linked to a Telegram chat_id by scanning all stored configs."""
         rows = await db.get_all_destination_configs_for_provider("telegram")

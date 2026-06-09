@@ -240,6 +240,53 @@ async def get_all_destination_configs_for_user(user_id: str) -> list[aiosqlite.R
             return await cursor.fetchall()
 
 
+async def delete_expired_telegram_link_codes(now: str) -> None:
+    """Delete telegram_link_codes rows where expires_at is in the past."""
+    async with get_db() as conn:
+        await conn.execute(
+            "DELETE FROM telegram_link_codes WHERE expires_at < ?", [now]
+        )
+        await conn.commit()
+
+
+async def get_admin_stats() -> dict:
+    """Return aggregate digest run statistics per user and overall totals."""
+    async with get_db() as conn:
+        async with conn.execute(
+            """
+            SELECT
+                user_id,
+                COUNT(*) AS total_runs,
+                SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success_runs,
+                SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS error_runs,
+                SUM(CASE WHEN status = 'empty' THEN 1 ELSE 0 END) AS empty_runs,
+                CAST(AVG(CAST(tokens_used AS REAL)) AS INTEGER) AS avg_tokens,
+                MAX(run_at) AS last_run_at
+            FROM digest_runs
+            GROUP BY user_id
+            ORDER BY user_id
+            """
+        ) as cursor:
+            run_rows = await cursor.fetchall()
+
+        async with conn.execute("SELECT COUNT(*) AS count FROM users") as cursor:
+            user_count_row = await cursor.fetchone()
+
+    per_user = [dict(row) for row in run_rows]
+    total_runs = sum(r["total_runs"] for r in per_user)
+    error_runs = sum(r["error_runs"] for r in per_user)
+    success_runs = sum(r["success_runs"] for r in per_user)
+
+    return {
+        "user_count": user_count_row["count"] if user_count_row else 0,
+        "total_runs": total_runs,
+        "success_runs": success_runs,
+        "error_runs": error_runs,
+        "error_rate": round(error_runs / total_runs, 4) if total_runs > 0 else 0.0,
+        "per_user": per_user,
+    }
+
+
 async def get_enabled_users_for_schedule(schedule_slot: str) -> list[aiosqlite.Row]:
     """Fetch all enabled users whose schedule matches the given slot ('morning', 'evening', 'both')."""
     async with get_db() as db:
