@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "test": "tsc --noEmit"
   },
   "dependencies": {
     "@types/nodemailer": "^8.0.0",
