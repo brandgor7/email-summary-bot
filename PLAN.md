@@ -756,14 +756,14 @@ edit the prompt, and re-run. This is the core UX for tuning digest quality.
 
 ---
 
-## Phase 8 — Hardening & Polish (Days 23–27)
+## Phase 8 — Hardening & Polish (Days 23–27) ✅ IMPLEMENTED
 
 ### Goals
 Make the system reliable enough to run unattended for weeks.
 
 ### Steps
 
-1. **Error resilience:**
+1. ✅ **Error resilience:**
    - Source token refresh fails → send message to all user's destinations:
      "Your Outlook connection expired — reconnect at [link]"
    - Claude API fails → retry once with 2s backoff; log and skip user on second failure
@@ -771,39 +771,58 @@ Make the system reliable enough to run unattended for weeks.
      do not retry (avoid duplicate messages)
    - Failures are always per-user and never cascade
 
-2. **Safety caps:**
+2. ✅ **Safety caps:**
    - Max 100 emails per digest per source (fetch top 100 by recency, note truncation in digest)
    - Max 255 chars of `bodyPreview` per email sent to LLM (MS Graph limit — no truncation needed)
    - Telegram: split messages at 4096 chars, label as "Part 1/2" etc.
 
-3. **Observability:**
+3. ✅ **Observability:**
    - `GET /admin/stats` (protected by `X-Admin-Secret` header, not the cron secret) —
      runs per user, avg token cost, error rate
    - All application logs to stdout → visible via `journalctl -u email-summary-bot`
 
-4. **Clean up expired Telegram link codes:**
+4. ✅ **Clean up expired Telegram link codes:**
    - Add a periodic cleanup (e.g. on every `/digest/run` trigger) to delete rows from
      `telegram_link_codes` where `expires_at < now`
 
-5. **Auto-renewal verification:**
+5. **Auto-renewal verification:** (manual server step)
 ```bash
 sudo certbot renew --dry-run
 ```
 
-6. **README.md** — complete setup guide covering: Azure app registration,
+6. ✅ **README.md** — complete setup guide covering: Azure app registration,
    Lightsail configuration, Vercel deploy, all env vars, and first user onboarding.
    Target: a new developer can set up the full stack in under 30 minutes.
 
+### Implemented (committed in `phase-8-hardening` branch)
+- `services/sources/base.py` — `TokenRefreshError` exception class
+- `services/sources/outlook.py` — `_refresh_token` raises `TokenRefreshError` on HTTP failure
+- `services/destinations/base.py` — `send_notification(user_id, message)` concrete no-op method
+- `services/destinations/telegram.py` — `send_notification` override sends plain text to linked chat
+- `services/summarizer.py` — 2s backoff between Claude API retry attempts; `truncated` param in
+  `build_prompt`/`summarize` appends a truncation note when email cap is hit
+- `db.py` — `delete_expired_telegram_link_codes(now)` and `get_admin_stats()` added
+- `routers/digest.py` — `_send_reconnect_notice` helper; `_EMAIL_CAP = 100` enforced on merged
+  email list; dest_configs fetched before source tokens (enables reconnect notice on token failure);
+  `delete_expired_telegram_link_codes` called at start of every `_run_digest_for_all_users`
+- `routers/admin.py` — `GET /admin/stats` endpoint protected by `X-Admin-Secret`
+- `main.py` — admin router registered
+- `tests/test_phase8.py` — 27 new tests covering all Phase 8 functionality
+- `tests/test_digest_run.py` — updated to reflect restructured `_process_single_user`
+- `tests/test_outlook.py` — updated `assertRaises(TokenRefreshError)` for token refresh test
+- `README.md` — complete local dev and production setup guide
+
 ### ✅ Verification
-- Simulate source failure: revoke a token and trigger a run →
-  user receives reconnect message on Telegram; other users unaffected
-- Simulate Claude timeout: set 1s timeout temporarily →
-  error logged, run continues for next user
-- 50-email digest splits correctly across multiple Telegram messages
-- `GET /admin/stats` with correct `X-Admin-Secret` returns accurate data; wrong secret returns 403
-- `GET /admin/stats` with correct `CRON_SECRET` (wrong header) returns 403
-- `sudo certbot renew --dry-run` succeeds
-- Developer following README alone sets up full stack in < 30 minutes
+- ✅ `TokenRefreshError` raised on MS Graph token refresh failure; reconnect notice sent to Telegram
+- ✅ Claude API retry sleeps 2 seconds between attempts (no sleep on first success)
+- ✅ 101 emails truncated to 100 before summarization; truncation note appended to prompt
+- ✅ `GET /admin/stats` with correct `X-Admin-Secret` returns data; wrong/missing secret returns 403
+- ✅ `CRON_SECRET` sent to `/admin/stats` returns 403 (secrets are independent)
+- ✅ Expired Telegram link codes deleted on every `/digest/run` trigger
+- ✅ `send_notification` on `TelegramDestination` sends plain text to linked chat
+- ✅ All 249 backend tests pass
+- ⬜ `sudo certbot renew --dry-run` succeeds (manual server step)
+- ⬜ Developer following README alone sets up full stack in < 30 minutes (live validation)
 
 ---
 

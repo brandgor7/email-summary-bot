@@ -163,6 +163,9 @@ class TestProcessSingleUser(unittest.IsolatedAsyncioTestCase):
             mock_db.get_digest_settings = AsyncMock(
                 return_value=_make_settings_row()
             )
+            mock_db.get_all_destination_configs_for_user = AsyncMock(
+                return_value=[_make_dest_row()]
+            )
             mock_db.get_all_source_tokens_for_user = AsyncMock(return_value=[])
             await _process_single_user("user-1", "2025-01-15T08:00:00+00:00")
             mock_db.update_last_run.assert_not_called()
@@ -228,10 +231,12 @@ class TestProcessSingleUser(unittest.IsolatedAsyncioTestCase):
             mock_db.get_digest_settings = AsyncMock(
                 return_value=_make_settings_row(last_run_at=None)
             )
+            mock_db.get_all_destination_configs_for_user = AsyncMock(
+                return_value=[_make_dest_row()]
+            )
             mock_db.get_all_source_tokens_for_user = AsyncMock(
                 return_value=[_make_token_row()]
             )
-            mock_db.get_all_destination_configs_for_user = AsyncMock(return_value=[])
             mock_db.update_last_run = AsyncMock()
             mock_db.insert_digest_run = AsyncMock()
 
@@ -455,10 +460,12 @@ class TestProcessSingleUser(unittest.IsolatedAsyncioTestCase):
             mock_db.get_digest_settings = AsyncMock(
                 return_value=_make_settings_row(last_run_at=stored_last_run)
             )
+            mock_db.get_all_destination_configs_for_user = AsyncMock(
+                return_value=[_make_dest_row()]
+            )
             mock_db.get_all_source_tokens_for_user = AsyncMock(
                 return_value=[_make_token_row()]
             )
-            mock_db.get_all_destination_configs_for_user = AsyncMock(return_value=[])
             mock_db.update_last_run = AsyncMock()
             mock_db.insert_digest_run = AsyncMock()
 
@@ -484,6 +491,7 @@ class TestRunDigestForAllUsers(unittest.IsolatedAsyncioTestCase):
             patch("routers.digest.db") as mock_db,
             patch("routers.digest._process_single_user", side_effect=fake_process),
         ):
+            mock_db.delete_expired_telegram_link_codes = AsyncMock()
             mock_db.get_enabled_users_for_schedule = AsyncMock(return_value=rows)
             await _run_digest_for_all_users("morning")
 
@@ -503,6 +511,7 @@ class TestRunDigestForAllUsers(unittest.IsolatedAsyncioTestCase):
             patch("routers.digest.db") as mock_db,
             patch("routers.digest._process_single_user", side_effect=fake_process),
         ):
+            mock_db.delete_expired_telegram_link_codes = AsyncMock()
             mock_db.get_enabled_users_for_schedule = AsyncMock(return_value=rows)
             # Should not raise even though user-A fails
             await _run_digest_for_all_users("morning")
@@ -512,12 +521,14 @@ class TestRunDigestForAllUsers(unittest.IsolatedAsyncioTestCase):
 
     async def test_queries_correct_schedule_slot(self) -> None:
         with patch("routers.digest.db") as mock_db:
+            mock_db.delete_expired_telegram_link_codes = AsyncMock()
             mock_db.get_enabled_users_for_schedule = AsyncMock(return_value=[])
             await _run_digest_for_all_users("evening")
             mock_db.get_enabled_users_for_schedule.assert_called_once_with("evening")
 
     async def test_no_users_completes_without_error(self) -> None:
         with patch("routers.digest.db") as mock_db:
+            mock_db.delete_expired_telegram_link_codes = AsyncMock()
             mock_db.get_enabled_users_for_schedule = AsyncMock(return_value=[])
             # Should not raise
             await _run_digest_for_all_users("morning")

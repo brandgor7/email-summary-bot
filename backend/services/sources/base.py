@@ -3,6 +3,10 @@ from dataclasses import dataclass
 from datetime import datetime
 
 
+class TokenRefreshError(Exception):
+    """Raised when an OAuth token refresh fails (e.g. token revoked or expired)."""
+
+
 @dataclass
 class EmailMessage:
     id: str

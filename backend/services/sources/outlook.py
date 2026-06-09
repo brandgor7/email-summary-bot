@@ -8,7 +8,7 @@ from urllib.parse import urlencode
 import httpx
 
 import db
-from services.sources.base import EmailMessage, EmailSource
+from services.sources.base import EmailMessage, EmailSource, TokenRefreshError
 from services.token_store import decrypt, encrypt
 
 logger = logging.getLogger(__name__)
@@ -145,7 +145,7 @@ class OutlookSource(EmailSource):
                 resp.raise_for_status()
                 token_data = resp.json()
         except httpx.HTTPError as exc:
-            raise RuntimeError(f"Token refresh failed: {exc}") from exc
+            raise TokenRefreshError(f"Token refresh failed: {exc}") from exc
 
         new_access_token = token_data["access_token"]
         new_refresh_token = token_data.get("refresh_token", refresh_token)
