@@ -178,7 +178,7 @@ async def preview_digest(
     req: PreviewRequest,
     user: dict = Depends(get_current_user),
 ) -> dict:
-    """On-demand digest preview — fetch emails, summarize, return structured digest."""
+    """On-demand digest preview — fetch emails, summarize, optionally send to a destination."""
     user_id: str = user["sub"]
 
     _check_rate_limit(user_id)
@@ -189,12 +189,28 @@ async def preview_digest(
             detail=f"Source provider '{req.source}' not registered",
         )
 
+    if req.send_to is not None and req.send_to not in DESTINATION_PROVIDERS:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Destination provider '{req.send_to}' not registered",
+        )
+
     since = datetime.now(timezone.utc) - timedelta(hours=req.since_hours)
     emails = await SOURCE_PROVIDERS[req.source].fetch_emails(user_id, since=since)
 
-    result = await summarizer.summarize(
+    summarizer_result = await summarizer.summarize(
         user_id, emails, digest_prefs_override=req.digest_prefs_override
     )
+    result: dict = dict(summarizer_result)
+
+    if req.send_to is not None:
+        try:
+            await DESTINATION_PROVIDERS[req.send_to].send_digest(user_id, result["digest"])
+            result["send_result"] = {"status": "sent", "destination": req.send_to}
+        except Exception as exc:
+            logger.error("Send preview failed user=%s dest=%s: %s", user_id, req.send_to, exc)
+            result["send_result"] = {"status": "error", "destination": req.send_to, "error": str(exc)}
+
     return result
 
 

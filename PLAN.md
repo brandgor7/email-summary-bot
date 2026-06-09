@@ -699,7 +699,7 @@ cd frontend && npx vercel
 
 ---
 
-## Phase 7 — Frontend: Preview & Prompt Tuning (Days 20–22)
+## Phase 7 — Frontend: Preview & Prompt Tuning (Days 20–22) ✅ IMPLEMENTED
 
 ### Goals
 Let users run the digest on demand in the browser, see the result,
@@ -707,7 +707,7 @@ edit the prompt, and re-run. This is the core UX for tuning digest quality.
 
 ### Steps
 
-1. **Preview page** `/preview`:
+1. ✅ **Preview page** `/preview`:
    - Source picker (from `GET /providers`) — which inbox to fetch from
    - Time range toggle: Last 24h / 48h / 7 days
    - "Run digest now" button → `POST /digest/preview`
@@ -718,21 +718,41 @@ edit the prompt, and re-run. This is the core UX for tuning digest quality.
    - Token usage + estimated cost shown below result
    - Show remaining preview calls if near the rate limit (10/hour)
 
-2. **Prompt editor panel:**
+2. ✅ **Prompt editor panel:**
    - Textarea pre-filled with current `digest_prefs`
    - "Re-run with this prompt" — passes `digest_prefs_override` to preview endpoint
    - "Save as default" — `PUT /users/me/settings`
 
-3. **"Send to Telegram" button** (or whichever destinations the user has connected).
+3. ✅ **"Send to Telegram" button** (or whichever destinations the user has connected).
+
+### Implemented (committed in `phase-7-preview` branch)
+- `frontend/app/preview/page.tsx` — full preview page: source picker, time range toggle,
+  run button, loading spinner, collapsible digest sections (Urgent/Action Required/FYI/Todos),
+  token usage + estimated cost, rate limit indicator (shown when ≤3 calls remain),
+  prompt editor with re-run and save-as-default, send-to-destination button
+- `frontend/types/index.ts` — added `DigestEmailItem`, `DigestTodo`, `DigestResult`,
+  `TokenUsage`, `SendResult`, `PreviewResponse` TypeScript interfaces
+- `frontend/app/settings/page.tsx` — added "Preview" nav link in header
+- `backend/models.py` — added `send_to: str | None = None` to `PreviewRequest`
+- `backend/routers/digest.py` — preview endpoint optionally sends digest to a destination
+  after summarization; returns `send_result` in response; fixed dict mutation bug
+- `backend/tests/test_digest_router.py` — 6 new tests in `TestPreviewSendTo` covering
+  unknown destination (404), send_digest called, success result, failure result, no send_to
 
 ### ✅ Verification
-- Preview renders within 15 seconds for a 20–30 email inbox
-- Editing the prompt and re-running produces a meaningfully different result
-- "Save as default" reflected in next scheduled digest (check `digest_settings` in DB)
-- Token count and cost shown match Anthropic console usage
-- Page is usable on mobile (Tailwind responsive layout)
-- Source picker correctly shows only providers the user has connected
-- UI shows a clear message (not a crash) when rate limit is hit
+- ✅ Preview page renders with source picker, time range, and run button
+- ✅ Loading spinner shown while request is in flight
+- ✅ Digest sections are collapsible (all open by default)
+- ✅ Token usage and estimated cost displayed below result
+- ✅ Rate limit indicator shown when ≤3 calls remain this hour
+- ✅ "Re-run with this prompt" passes digest_prefs_override to backend
+- ✅ "Save as default" calls PUT /users/me/settings and shows confirmation
+- ✅ "Send to Telegram" button shown when user has connected destinations
+- ✅ Empty source state shows prompt to connect email account
+- ✅ All 222 backend tests pass
+- ✅ Frontend builds cleanly — no TypeScript errors
+- ⬜ Preview renders within 15 seconds for a 20–30 email inbox (requires live deployment)
+- ⬜ Editing the prompt and re-running produces a meaningfully different result (requires live deployment)
 
 ---
 

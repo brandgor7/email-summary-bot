@@ -124,7 +124,13 @@ export default function SettingsPage() {
           <div className="flex items-center gap-2 text-lg font-semibold text-gray-900">
             <span>📬</span> Email Digest
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-4">
+            <a
+              href="/preview"
+              className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+            >
+              Preview
+            </a>
             <a
               href="/onboard"
               className="text-sm text-blue-600 hover:text-blue-700 font-medium"
