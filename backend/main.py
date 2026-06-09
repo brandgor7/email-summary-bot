@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 
 from routers import auth, destinations, digest, users
+from services.registry import DESTINATION_PROVIDERS, SOURCE_PROVIDERS
 
 app = FastAPI(title="email-summary-bot")
 
@@ -14,3 +15,12 @@ app.include_router(users.router)
 async def health() -> dict:
     """Liveness check used by deploy.sh and monitoring."""
     return {"status": "ok"}
+
+
+@app.get("/providers")
+async def list_providers() -> dict:
+    """Return the registered source and destination provider keys — no auth required."""
+    return {
+        "sources": list(SOURCE_PROVIDERS.keys()),
+        "destinations": list(DESTINATION_PROVIDERS.keys()),
+    }
