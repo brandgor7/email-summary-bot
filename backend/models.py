@@ -17,3 +17,4 @@ class PreviewRequest(BaseModel):
     source: str = "outlook"
     since_hours: int = 24
     digest_prefs_override: str | None = None
+    send_to: str | None = None

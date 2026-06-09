@@ -300,5 +300,162 @@ class TestPreviewSuccess(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
 
 
+class TestPreviewSendTo(unittest.TestCase):
+    """Tests for the optional send_to field on /digest/preview."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.client = TestClient(app)
+        cls.unique_user = "preview-send-to-user"
+        cls.headers = {"Authorization": f"Bearer {_valid_token(sub=cls.unique_user)}"}
+
+    def setUp(self) -> None:
+        import routers.digest as digest_module
+        digest_module._preview_timestamps[self.unique_user] = []
+
+    def test_send_to_unknown_destination_returns_404(self) -> None:
+        with (
+            patch(
+                "routers.digest.SOURCE_PROVIDERS",
+                {"outlook": AsyncMock(fetch_emails=AsyncMock(return_value=[]))},
+            ),
+            patch(
+                "routers.digest.summarizer.summarize",
+                new_callable=AsyncMock,
+                return_value=_EMPTY_DIGEST,
+            ),
+        ):
+            response = self.client.post(
+                "/digest/preview",
+                json={"source": "outlook", "send_to": "carrier_pigeon"},
+                headers=self.headers,
+            )
+        self.assertEqual(response.status_code, 404)
+        self.assertIn("carrier_pigeon", response.json()["detail"])
+
+    def test_send_to_calls_destination_send_digest(self) -> None:
+        mock_send_digest = AsyncMock()
+        with (
+            patch(
+                "routers.digest.SOURCE_PROVIDERS",
+                {"outlook": AsyncMock(fetch_emails=AsyncMock(return_value=[]))},
+            ),
+            patch(
+                "routers.digest.summarizer.summarize",
+                new_callable=AsyncMock,
+                return_value=_EMPTY_DIGEST,
+            ),
+            patch(
+                "routers.digest.DESTINATION_PROVIDERS",
+                {"telegram": AsyncMock(send_digest=mock_send_digest)},
+            ),
+        ):
+            response = self.client.post(
+                "/digest/preview",
+                json={"source": "outlook", "send_to": "telegram"},
+                headers=self.headers,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        mock_send_digest.assert_called_once()
+
+    def test_send_to_success_includes_send_result(self) -> None:
+        with (
+            patch(
+                "routers.digest.SOURCE_PROVIDERS",
+                {"outlook": AsyncMock(fetch_emails=AsyncMock(return_value=[]))},
+            ),
+            patch(
+                "routers.digest.summarizer.summarize",
+                new_callable=AsyncMock,
+                return_value=_EMPTY_DIGEST,
+            ),
+            patch(
+                "routers.digest.DESTINATION_PROVIDERS",
+                {"telegram": AsyncMock(send_digest=AsyncMock())},
+            ),
+        ):
+            response = self.client.post(
+                "/digest/preview",
+                json={"source": "outlook", "send_to": "telegram"},
+                headers=self.headers,
+            )
+
+        body = response.json()
+        self.assertEqual(body["send_result"]["status"], "sent")
+        self.assertEqual(body["send_result"]["destination"], "telegram")
+
+    def test_send_to_failure_returns_digest_with_error_status(self) -> None:
+        mock_send = AsyncMock(side_effect=RuntimeError("Telegram unavailable"))
+        with (
+            patch(
+                "routers.digest.SOURCE_PROVIDERS",
+                {"outlook": AsyncMock(fetch_emails=AsyncMock(return_value=[]))},
+            ),
+            patch(
+                "routers.digest.summarizer.summarize",
+                new_callable=AsyncMock,
+                return_value=_EMPTY_DIGEST,
+            ),
+            patch(
+                "routers.digest.DESTINATION_PROVIDERS",
+                {"telegram": AsyncMock(send_digest=mock_send)},
+            ),
+        ):
+            response = self.client.post(
+                "/digest/preview",
+                json={"source": "outlook", "send_to": "telegram"},
+                headers=self.headers,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertIn("digest", body)
+        self.assertEqual(body["send_result"]["status"], "error")
+        self.assertIn("Telegram unavailable", body["send_result"]["error"])
+
+    def test_no_send_to_returns_no_send_result(self) -> None:
+        with (
+            patch(
+                "routers.digest.SOURCE_PROVIDERS",
+                {"outlook": AsyncMock(fetch_emails=AsyncMock(return_value=[]))},
+            ),
+            patch(
+                "routers.digest.summarizer.summarize",
+                new_callable=AsyncMock,
+                return_value=_EMPTY_DIGEST,
+            ),
+        ):
+            response = self.client.post(
+                "/digest/preview",
+                json={"source": "outlook"},
+                headers=self.headers,
+            )
+
+        body = response.json()
+        self.assertNotIn("send_result", body)
+
+    def test_send_to_none_returns_no_send_result(self) -> None:
+        with (
+            patch(
+                "routers.digest.SOURCE_PROVIDERS",
+                {"outlook": AsyncMock(fetch_emails=AsyncMock(return_value=[]))},
+            ),
+            patch(
+                "routers.digest.summarizer.summarize",
+                new_callable=AsyncMock,
+                return_value=_EMPTY_DIGEST,
+            ),
+        ):
+            response = self.client.post(
+                "/digest/preview",
+                json={"source": "outlook", "send_to": None},
+                headers=self.headers,
+            )
+
+        body = response.json()
+        self.assertNotIn("send_result", body)
+
+
 if __name__ == "__main__":
     unittest.main()
