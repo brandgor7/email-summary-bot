@@ -9,8 +9,10 @@
     "test": "tsc --noEmit"
   },
   "dependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/nodemailer": "^8.0.0",
     "axios": "^1.17.0",
+    "better-sqlite3": "^12.10.0",
     "next": "16.2.7",
     "next-auth": "^4.24.14",
     "nodemailer": "^7.0.13",
@@ -24,5 +26,8 @@
     "@types/react-dom": "^19",
     "tailwindcss": "^4",
     "typescript": "^5"
+  },
+  "allowScripts": {
+    "better-sqlite3@12.10.0": true
   }
 }
