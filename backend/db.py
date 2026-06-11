@@ -50,22 +50,24 @@ async def upsert_source_token(
     refresh_token_enc: str,
     expires_at: str,
     created_at: str,
+    account_type: str = "personal",
 ) -> None:
     """Insert or replace a source token row."""
     async with get_db() as db:
         await db.execute(
             """INSERT INTO source_tokens
                (id, user_id, provider, provider_email, access_token_enc,
-                refresh_token_enc, expires_at, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                refresh_token_enc, expires_at, created_at, account_type)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(user_id, provider) DO UPDATE SET
                  provider_email=excluded.provider_email,
                  access_token_enc=excluded.access_token_enc,
                  refresh_token_enc=excluded.refresh_token_enc,
-                 expires_at=excluded.expires_at""",
+                 expires_at=excluded.expires_at,
+                 account_type=excluded.account_type""",
             [
                 token_id, user_id, provider, provider_email,
-                access_token_enc, refresh_token_enc, expires_at, created_at,
+                access_token_enc, refresh_token_enc, expires_at, created_at, account_type,
             ],
         )
         await db.commit()

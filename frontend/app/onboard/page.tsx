@@ -16,6 +16,7 @@ function OnboardContent() {
   const [step, setStep] = useState<Step>(1);
   const [providers, setProviders] = useState<ProvidersResponse | null>(null);
   const [outlookConnected, setOutlookConnected] = useState(false);
+  const [outlookAccountType, setOutlookAccountType] = useState<"personal" | "work">("personal");
   const [telegramLinked, setTelegramLinked] = useState(false);
   const [linkCode, setLinkCode] = useState<LinkCodeResponse | null>(null);
   const [digestPrefs, setDigestPrefs] = useState("");
@@ -58,7 +59,7 @@ function OnboardContent() {
   async function connectOutlook() {
     setError(null);
     try {
-      const res = await api.get("/auth/outlook/url");
+      const res = await api.get("/auth/outlook/url", { params: { account_type: outlookAccountType } });
       window.location.href = res.data.url;
     } catch {
       setError("Failed to get Outlook authorization URL.");
@@ -164,16 +165,41 @@ function OnboardContent() {
             ) : (
               <div className="space-y-3">
                 {providers?.sources.includes("outlook") && (
-                  <button
-                    onClick={connectOutlook}
-                    className="w-full flex items-center gap-3 p-4 border-2 border-gray-200 rounded-xl hover:border-blue-400 hover:bg-blue-50 transition-colors text-left"
-                  >
-                    <span className="text-2xl">📧</span>
-                    <div>
-                      <div className="font-medium text-gray-900">Microsoft Outlook</div>
-                      <div className="text-sm text-gray-500">Connect your Outlook / Office 365 inbox</div>
+                  <div className="border-2 border-gray-200 rounded-xl p-4 space-y-4">
+                    <div className="flex items-center gap-3">
+                      <span className="text-2xl">📧</span>
+                      <div>
+                        <div className="font-medium text-gray-900">Microsoft Outlook</div>
+                        <div className="text-sm text-gray-500">Connect your Outlook inbox</div>
+                      </div>
                     </div>
-                  </button>
+
+                    <div>
+                      <p className="text-xs font-medium text-gray-600 mb-2">Account type</p>
+                      <div className="grid grid-cols-2 gap-2">
+                        {(["personal", "work"] as const).map((type) => (
+                          <button
+                            key={type}
+                            onClick={() => setOutlookAccountType(type)}
+                            className={`py-2 px-3 rounded-lg border-2 text-sm font-medium transition-colors ${
+                              outlookAccountType === type
+                                ? "border-blue-500 bg-blue-50 text-blue-700"
+                                : "border-gray-200 text-gray-600 hover:border-gray-300"
+                            }`}
+                          >
+                            {type === "personal" ? "Personal" : "Work / School"}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={connectOutlook}
+                      className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg font-medium hover:bg-blue-700 transition-colors text-sm"
+                    >
+                      Connect with Microsoft
+                    </button>
+                  </div>
                 )}
               </div>
             )}

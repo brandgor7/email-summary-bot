@@ -16,6 +16,7 @@ CREATE TABLE source_tokens (
   refresh_token_enc TEXT NOT NULL,            -- AES-256 encrypted
   expires_at        TEXT NOT NULL,
   created_at        TEXT NOT NULL,
+  account_type      TEXT NOT NULL DEFAULT 'personal',  -- 'personal' | 'work'
   UNIQUE(user_id, provider)                   -- One source per provider per user (v1)
 );
 

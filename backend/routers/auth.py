@@ -10,12 +10,16 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 @router.get("/{source}/url")
-async def get_auth_url(source: str, user: dict = Depends(get_current_user)) -> dict:
+async def get_auth_url(
+    source: str,
+    account_type: str = "personal",
+    user: dict = Depends(get_current_user),
+) -> dict:
     """Return the OAuth consent URL for the given source provider."""
     provider = SOURCE_PROVIDERS.get(source)
     if not provider:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Unknown source: {source}")
-    url = await provider.get_auth_url(user["sub"])
+    url = await provider.get_auth_url(user["sub"], account_type)
     return {"url": url}
 
 
