@@ -1,7 +1,9 @@
 import { NextAuthOptions } from "next-auth";
 import EmailProvider from "next-auth/providers/email";
+import { SQLiteAdapter } from "./sqlite-adapter";
 
 export const authOptions: NextAuthOptions = {
+  adapter: SQLiteAdapter(),
   providers: [
     EmailProvider({
       from: process.env.EMAIL_FROM ?? "noreply@example.com",
