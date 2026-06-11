@@ -22,7 +22,7 @@ class EmailMessage:
 
 class EmailSource(ABC):
     @abstractmethod
-    async def get_auth_url(self, user_id: str) -> str:
+    async def get_auth_url(self, user_id: str, account_type: str = "personal") -> str:
         """Return OAuth consent URL for this provider."""
 
     @abstractmethod

@@ -1,9 +1,43 @@
+import os
+from contextlib import asynccontextmanager
+
+import aiosqlite
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from routers import admin, auth, destinations, digest, users
 from services.registry import DESTINATION_PROVIDERS, SOURCE_PROVIDERS
 
-app = FastAPI(title="email-summary-bot")
+
+async def _run_migrations() -> None:
+    """Apply any schema migrations needed for existing databases."""
+    db_path = os.getenv("DB_PATH", "./dev.sqlite")
+    async with aiosqlite.connect(db_path) as conn:
+        try:
+            await conn.execute(
+                "ALTER TABLE source_tokens ADD COLUMN account_type TEXT NOT NULL DEFAULT 'personal'"
+            )
+            await conn.commit()
+        except Exception:
+            pass  # Column already exists
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await _run_migrations()
+    yield
+
+
+app = FastAPI(title="email-summary-bot", lifespan=lifespan)
+
+frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[frontend_url],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(admin.router)
 app.include_router(auth.router)

@@ -13,13 +13,22 @@ from services.token_store import decrypt, encrypt
 
 logger = logging.getLogger(__name__)
 
-_AUTHORITY = "https://login.microsoftonline.com/common/oauth2/v2.0"
 _GRAPH_BASE = "https://graph.microsoft.com/v1.0"
-_SCOPES = "Mail.Read offline_access"
+_SCOPES = "Mail.Read User.Read offline_access"
+
+_AUTHORITY_MAP = {
+    "personal": "https://login.microsoftonline.com/consumers/oauth2/v2.0",
+    "work": "https://login.microsoftonline.com/organizations/oauth2/v2.0",
+}
+
+
+def _authority(account_type: str) -> str:
+    """Return the MS identity authority URL for the given account type."""
+    return _AUTHORITY_MAP.get(account_type, _AUTHORITY_MAP["personal"])
 
 
 class OutlookSource(EmailSource):
-    async def get_auth_url(self, user_id: str) -> str:
+    async def get_auth_url(self, user_id: str, account_type: str = "personal") -> str:
         """Return Microsoft OAuth consent URL."""
         params = {
             "client_id": os.getenv("MS_CLIENT_ID", ""),
@@ -27,12 +36,20 @@ class OutlookSource(EmailSource):
             "redirect_uri": os.getenv("MS_REDIRECT_URI", ""),
             "response_mode": "query",
             "scope": _SCOPES,
-            "state": user_id,
+            "state": f"{user_id}|{account_type}",
         }
-        return f"{_AUTHORITY}/authorize?{urlencode(params)}"
+        return f"{_authority(account_type)}/authorize?{urlencode(params)}"
 
     async def handle_callback(self, user_id: str, code: str) -> None:
-        """Exchange auth code for tokens and store them encrypted."""
+        """Exchange auth code for tokens and store them encrypted.
+
+        `user_id` may be a pipe-delimited string `{user_id}|{account_type}`
+        when coming from the browser redirect flow.
+        """
+        if "|" in user_id:
+            actual_user_id, account_type = user_id.split("|", 1)
+        else:
+            actual_user_id, account_type = user_id, "personal"
         client_id = os.getenv("MS_CLIENT_ID", "")
         client_secret = os.getenv("MS_CLIENT_SECRET", "")
         redirect_uri = os.getenv("MS_REDIRECT_URI", "")
@@ -40,7 +57,7 @@ class OutlookSource(EmailSource):
         try:
             async with httpx.AsyncClient() as client:
                 token_resp = await client.post(
-                    f"{_AUTHORITY}/token",
+                    f"{_authority(account_type)}/token",
                     data={
                         "grant_type": "authorization_code",
                         "client_id": client_id,
@@ -70,13 +87,14 @@ class OutlookSource(EmailSource):
 
         await db.upsert_source_token(
             token_id=str(uuid.uuid4()),
-            user_id=user_id,
+            user_id=actual_user_id,
             provider="outlook",
             provider_email=provider_email,
             access_token_enc=encrypt(token_data["access_token"]),
             refresh_token_enc=encrypt(token_data["refresh_token"]),
             expires_at=expires_at,
             created_at=datetime.now(timezone.utc).isoformat(),
+            account_type=account_type,
         )
 
     async def fetch_emails(self, user_id: str, since: datetime | None) -> list[EmailMessage]:
@@ -124,16 +142,17 @@ class OutlookSource(EmailSource):
             expires_at = expires_at.replace(tzinfo=timezone.utc)
 
         if datetime.now(timezone.utc) >= expires_at - timedelta(minutes=5):
-            return await self._refresh_token(user_id, decrypt(row["refresh_token_enc"]))
+            account_type = row["account_type"] if "account_type" in row.keys() else "personal"
+            return await self._refresh_token(user_id, decrypt(row["refresh_token_enc"]), account_type)
 
         return decrypt(row["access_token_enc"])
 
-    async def _refresh_token(self, user_id: str, refresh_token: str) -> str:
+    async def _refresh_token(self, user_id: str, refresh_token: str, account_type: str = "personal") -> str:
         """Exchange a refresh token for a new access token and persist the updated tokens."""
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.post(
-                    f"{_AUTHORITY}/token",
+                    f"{_authority(account_type)}/token",
                     data={
                         "grant_type": "refresh_token",
                         "client_id": os.getenv("MS_CLIENT_ID", ""),
@@ -163,6 +182,7 @@ class OutlookSource(EmailSource):
             refresh_token_enc=encrypt(new_refresh_token),
             expires_at=expires_at,
             created_at=row["created_at"],
+            account_type=account_type,
         )
 
         logger.info("Refreshed Outlook access token for user %s", user_id)
