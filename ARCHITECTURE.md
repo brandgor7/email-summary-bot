@@ -283,9 +283,7 @@ is always derived from the validated token — never accepted as a request body 
 **`NEXTAUTH_SECRET` must be set in the backend `.env`** (same value as the Vercel
 environment variable). It is the shared secret used to verify token signatures.
 
-The `/digest/run` (cron trigger) and `/destinations/telegram/webhook` (Telegram push)
-routes are not user-authenticated — they use the cron secret and Telegram webhook
-secret respectively (see Security Considerations).
+The `/digest/run` (cron trigger) route is not user-authenticated — it uses the cron secret (see Security Considerations).
 
 ---
 
@@ -358,13 +356,12 @@ CREATE TABLE digest_runs (
   tokens_used  INTEGER
 );
 
--- Short-lived codes for linking a Telegram chat_id to an app user
--- Created when user clicks "Connect Telegram"; consumed when /start <code> is received
+-- Retained for schema compatibility; no longer used (Telegram linking now uses direct chat_id input)
 CREATE TABLE telegram_link_codes (
   code       TEXT PRIMARY KEY,               -- 6-char alphanumeric, e.g. 'A3K9PX'
   user_id    TEXT NOT NULL REFERENCES users(id),
   created_at TEXT NOT NULL,
-  expires_at TEXT NOT NULL                   -- 10 minutes after created_at
+  expires_at TEXT NOT NULL
 );
 ```
 
@@ -493,53 +490,17 @@ must handle a `None` value for `since` by substituting `datetime.utcnow() - time
 
 ### Destination: Telegram
 
-**Setup per user — one-time code linking:**
+**Setup per user — direct chat_id input:**
 
-The web UI and the Telegram bot need to agree on which app user a given `chat_id`
-belongs to. This is solved with a short-lived one-time code:
+The user finds their numeric Telegram chat ID (e.g. by messaging **@userinfobot**) and enters it in the web app. The frontend posts it directly to the backend:
 
-1. User clicks "Connect Telegram" on the frontend (`/onboard` or `/settings`)
-2. Frontend calls `POST /destinations/telegram/link-code`
-3. Backend generates a 6-char alphanumeric code (e.g. `A3K9PX`), stores it in
-   `telegram_link_codes` with a 10-minute expiry, returns it
-4. Frontend shows: **"Open Telegram and send `/start A3K9PX` to @YourBot"**
-5. User sends the message → Telegram POSTs to `/destinations/telegram/webhook`
-6. Backend reads the code from the message text, looks up `telegram_link_codes`,
-   finds the `user_id`, stores the `chat_id` encrypted in `destination_config`,
-   deletes the code row
-7. Frontend polls `GET /destinations/telegram/status` until linking is confirmed
+1. User opens `/onboard` and reaches the Telegram step
+2. User gets their chat ID from @userinfobot
+3. User enters the ID in the form → frontend calls `POST /destinations/telegram/connect`
+4. Backend stores the `chat_id` encrypted in `destination_config`
+5. Return `{"linked": true}` — no polling needed
 
-Codes expire after 10 minutes. If a code is missing or expired, the bot replies
-with a message directing the user back to the web app to generate a new one.
-
-**Webhook security:**
-
-The Telegram webhook endpoint (`POST /destinations/telegram/webhook`) is public but
-must reject requests that don't come from Telegram. Register the webhook with a secret
-token and validate it on every request:
-
-```bash
-# Register webhook with secret token
-curl "https://api.telegram.org/bot<TOKEN>/setWebhook \
-  ?url=https://api.yourdomain.com/destinations/telegram/webhook \
-  &secret_token=<TELEGRAM_WEBHOOK_SECRET>"
-```
-
-```python
-# In the webhook handler — reject if header is missing or wrong
-X-Telegram-Bot-Api-Secret-Token: <TELEGRAM_WEBHOOK_SECRET>
-```
-
-`TELEGRAM_WEBHOOK_SECRET` is a random value (e.g. `openssl rand -hex 24`) stored in `.env`.
-
-**Supported bot commands:**
-| Command | Action |
-|---|---|
-| `/start <code>` | Link this chat to the app user identified by `code` |
-| `/digest` | Trigger an immediate digest |
-| `/pause` | Pause scheduled digests |
-| `/resume` | Resume scheduled digests |
-| `/status` | Show last run time and email count |
+No webhook, no ngrok, no bot commands required.
 
 **Message format:**
 ```
@@ -708,8 +669,6 @@ echo "Deployed at $(date)"
 - **Cron auth:** Three-layer protection on `POST /digest/run`: (1) uvicorn binds to `127.0.0.1` only so port 8000 is unreachable externally, (2) nginx returns 404 for this path on port 443, (3) `X-Cron-Secret` header validated on every request — 403 if missing/wrong. The `CRON_SECRET` is read directly from `.env` at cron time and never transmitted over the network.
 - **JWT auth:** All user-facing routes use `get_current_user` (validates NextAuth JWT).
   `user_id` is always derived from the token — never accepted from the request body.
-- **Telegram webhook auth:** `X-Telegram-Bot-Api-Secret-Token` validated on every
-  webhook request — returns 403 if missing/wrong.
 - **No full email body by default:** Only `bodyPreview` (≤255 chars) sent to LLM.
 - **Rate limiting on preview:** `POST /digest/preview` is limited to 10 calls per user
   per hour to prevent runaway Claude API cost. Enforced via in-process sliding window.
@@ -741,7 +700,6 @@ MS_REDIRECT_URI=https://api.yourdomain.com/auth/outlook/callback
 
 # Telegram
 TELEGRAM_BOT_TOKEN=...
-TELEGRAM_WEBHOOK_SECRET=...     # Random secret: openssl rand -hex 24
 
 # Future sources/destinations — add here as implemented
 # GOOGLE_CLIENT_ID=...

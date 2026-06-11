@@ -70,7 +70,6 @@ MS_REDIRECT_URI=http://localhost:8000/auth/outlook/callback
 
 # Telegram
 TELEGRAM_BOT_TOKEN=<from @BotFather>
-TELEGRAM_WEBHOOK_SECRET=<run: python3 -c "import secrets; print(secrets.token_hex(24))">
 
 FRONTEND_URL=http://localhost:3000
 ```
@@ -142,13 +141,12 @@ npm run dev
 # Message @BotFather on Telegram:
 /newbot
 # Follow prompts, copy the token to TELEGRAM_BOT_TOKEN in .env
-
-# For local development, use ngrok to expose your backend:
-ngrok http 8000
-
-# Register the webhook (replace with your ngrok URL):
-curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://YOUR_NGROK.ngrok.io/destinations/telegram/webhook&secret_token=<TELEGRAM_WEBHOOK_SECRET>"
 ```
+
+To find your Telegram chat ID:
+1. Open Telegram and search for **@userinfobot**
+2. Send any message — it replies with your numeric ID (e.g. `123456789`)
+3. Paste that into the web app when prompted during onboarding
 
 ---
 
@@ -248,7 +246,6 @@ sudo -u appuser /usr/local/bin/digest-trigger.sh
 | `MS_CLIENT_SECRET` | Azure app client secret |
 | `MS_REDIRECT_URI` | OAuth callback URL registered in Azure |
 | `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather |
-| `TELEGRAM_WEBHOOK_SECRET` | Webhook validation secret (`openssl rand -hex 24`) |
 
 ### Frontend (`frontend/.env.local`)
 
@@ -272,9 +269,8 @@ sudo -u appuser /usr/local/bin/digest-trigger.sh
 | `GET/POST` | `/auth/{source}/callback` | — | OAuth callback |
 | `POST` | `/digest/preview` | JWT | On-demand digest (10/hour rate limit) |
 | `POST` | `/digest/run` | Cron secret | Scheduled digest trigger (returns 202) |
-| `POST` | `/destinations/telegram/link-code` | JWT | Generate Telegram link code |
+| `POST` | `/destinations/telegram/connect` | JWT | Connect Telegram by supplying a chat_id |
 | `GET` | `/destinations/telegram/status` | JWT | Check Telegram link status |
-| `POST` | `/destinations/telegram/webhook` | Webhook secret | Telegram Bot webhook |
 | `DELETE` | `/destinations/{type}/disconnect` | JWT | Disconnect a destination |
 | `GET` | `/users/me/settings` | JWT | Get digest settings |
 | `PUT` | `/users/me/settings` | JWT | Update digest settings |
@@ -309,10 +305,9 @@ sudo -u appuser /usr/local/bin/digest-trigger.sh
 - Confirm `MS_REDIRECT_URI` in `.env` exactly matches the URI registered in Azure
 - Make sure `Mail.Read` and `offline_access` delegated permissions are added
 
-**Telegram bot not receiving messages:**
-- Re-run the `setWebhook` curl command
-- Confirm `TELEGRAM_WEBHOOK_SECRET` matches in both the webhook registration and `.env`
-- Check ngrok is still running (for local development)
+**Telegram bot not sending digests:**
+- Confirm `TELEGRAM_BOT_TOKEN` is set correctly
+- Verify the chat ID stored for your account is correct (reconnect via `/onboard` if needed)
 
 **Digests not sending:**
 - Check `digest_settings.enabled = 1` and schedule matches the cron slot
