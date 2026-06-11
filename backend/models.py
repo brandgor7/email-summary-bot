@@ -1,4 +1,18 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+
+class TelegramConnectRequest(BaseModel):
+    chat_id: str
+
+    @field_validator("chat_id")
+    @classmethod
+    def must_be_numeric(cls, v: str) -> str:
+        """Telegram chat IDs are integers; group chats are negative."""
+        stripped = v.strip()
+        numeric = stripped.lstrip("-")
+        if not numeric.isdigit():
+            raise ValueError("chat_id must be a numeric Telegram chat ID")
+        return stripped
 
 
 class DigestSettingsResponse(BaseModel):

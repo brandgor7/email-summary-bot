@@ -4,7 +4,7 @@ import { useSession } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState, Suspense } from "react";
 import api from "@/lib/api";
-import type { LinkCodeResponse, ProvidersResponse, TelegramStatusResponse } from "@/types";
+import type { ProvidersResponse, TelegramStatusResponse } from "@/types";
 
 type Step = 1 | 2 | 3;
 
@@ -18,7 +18,9 @@ function OnboardContent() {
   const [outlookConnected, setOutlookConnected] = useState(false);
   const [outlookAccountType, setOutlookAccountType] = useState<"personal" | "work">("personal");
   const [telegramLinked, setTelegramLinked] = useState(false);
-  const [linkCode, setLinkCode] = useState<LinkCodeResponse | null>(null);
+  const [chatIdInput, setChatIdInput] = useState("");
+  const [chatIdError, setChatIdError] = useState<string | null>(null);
+  const [connectingTelegram, setConnectingTelegram] = useState(false);
   const [digestPrefs, setDigestPrefs] = useState("");
   const [schedule, setSchedule] = useState<"morning" | "evening" | "both">("morning");
   const [saving, setSaving] = useState(false);
@@ -66,30 +68,22 @@ function OnboardContent() {
     }
   }
 
-  async function getTelegramCode() {
-    setError(null);
-    try {
-      const res = await api.post<LinkCodeResponse>("/destinations/telegram/link-code");
-      setLinkCode(res.data);
-      pollTelegramStatus();
-    } catch {
-      setError("Failed to generate Telegram link code.");
+  async function connectTelegram() {
+    setChatIdError(null);
+    const trimmed = chatIdInput.trim();
+    if (!trimmed || !/^-?\d+$/.test(trimmed)) {
+      setChatIdError("Enter a valid Telegram chat ID (numbers only).");
+      return;
     }
-  }
-
-  function pollTelegramStatus() {
-    const interval = setInterval(async () => {
-      try {
-        const res = await api.get<TelegramStatusResponse>("/destinations/telegram/status");
-        if (res.data.linked) {
-          setTelegramLinked(true);
-          clearInterval(interval);
-        }
-      } catch {
-        clearInterval(interval);
-      }
-    }, 3000);
-    setTimeout(() => clearInterval(interval), 10 * 60 * 1000);
+    setConnectingTelegram(true);
+    try {
+      await api.post<TelegramStatusResponse>("/destinations/telegram/connect", { chat_id: trimmed });
+      setTelegramLinked(true);
+    } catch {
+      setChatIdError("Failed to connect. Double-check your chat ID and try again.");
+    } finally {
+      setConnectingTelegram(false);
+    }
   }
 
   async function savePreferences() {
@@ -232,35 +226,45 @@ function OnboardContent() {
             ) : (
               <div className="space-y-4">
                 {providers?.destinations.includes("telegram") && (
-                  <div className="border-2 border-gray-200 rounded-xl p-4">
-                    <div className="flex items-center gap-3 mb-3">
+                  <div className="border-2 border-gray-200 rounded-xl p-4 space-y-4">
+                    <div className="flex items-center gap-3">
                       <span className="text-2xl">✈️</span>
                       <div>
                         <div className="font-medium text-gray-900">Telegram</div>
                         <div className="text-sm text-gray-500">Receive digests via Telegram bot</div>
                       </div>
                     </div>
-                    {linkCode ? (
-                      <div className="bg-blue-50 rounded-lg p-4 text-sm">
-                        <p className="text-gray-700 mb-2">
-                          Open Telegram and send this command to{" "}
-                          <strong>{linkCode.bot_username}</strong>:
-                        </p>
-                        <code className="block bg-white border border-blue-200 rounded px-3 py-2 text-blue-800 font-mono text-base">
-                          /start {linkCode.code}
-                        </code>
-                        <p className="text-gray-400 text-xs mt-2">
-                          Waiting for confirmation… (checking every 3 seconds)
-                        </p>
-                      </div>
-                    ) : (
+
+                    <div className="bg-blue-50 rounded-lg p-4 text-sm space-y-2">
+                      <p className="font-medium text-gray-800">How to find your chat ID:</p>
+                      <ol className="list-decimal list-inside text-gray-600 space-y-1">
+                        <li>Open Telegram and search for <strong>@userinfobot</strong></li>
+                        <li>Start a chat and send any message</li>
+                        <li>It replies with your numeric ID (e.g. <code className="bg-white px-1 rounded border border-blue-200">123456789</code>)</li>
+                        <li>Paste that number below</li>
+                      </ol>
+                    </div>
+
+                    <div className="space-y-2">
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        placeholder="Your Telegram chat ID"
+                        value={chatIdInput}
+                        onChange={(e) => setChatIdInput(e.target.value)}
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono"
+                      />
+                      {chatIdError && (
+                        <p className="text-red-600 text-xs">{chatIdError}</p>
+                      )}
                       <button
-                        onClick={getTelegramCode}
-                        className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg font-medium hover:bg-blue-700 transition-colors"
+                        onClick={connectTelegram}
+                        disabled={connectingTelegram || !chatIdInput.trim()}
+                        className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg font-medium hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors text-sm"
                       >
-                        Generate link code
+                        {connectingTelegram ? "Connecting…" : "Connect Telegram"}
                       </button>
-                    )}
+                    </div>
                   </div>
                 )}
               </div>

@@ -18,11 +18,6 @@ export interface DestinationConfig {
   provider: string;
 }
 
-export interface LinkCodeResponse {
-  code: string;
-  bot_username: string;
-}
-
 export interface TelegramStatusResponse {
   linked: boolean;
 }
