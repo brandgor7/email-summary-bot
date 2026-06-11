@@ -498,9 +498,7 @@ The user finds their numeric Telegram chat ID (e.g. by messaging **@userinfobot*
 2. User gets their chat ID from @userinfobot
 3. User enters the ID in the form → frontend calls `POST /destinations/telegram/connect`
 4. Backend stores the `chat_id` encrypted in `destination_config`
-5. Return `{"linked": true}` — no polling needed
-
-No webhook, no ngrok, no bot commands required.
+5. Return `{"linked": true}`
 
 **Message format:**
 ```
