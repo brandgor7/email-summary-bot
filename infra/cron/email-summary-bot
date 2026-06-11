@@ -1,0 +1,19 @@
+# Email digest cron triggers
+# Calls the local backend to run the digest at 7am and 5pm UTC.
+#
+# Installation:
+#   sudo cp infra/cron/email-summary-bot /etc/cron.d/email-summary-bot
+#   sudo chmod 644 /etc/cron.d/email-summary-bot
+#   sudo chown root:root /etc/cron.d/email-summary-bot
+#
+# /etc/cron.d files must be owned by root with mode 644 and must NOT be
+# group- or world-writable — cron will silently ignore them otherwise.
+
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+
+# Morning digest — 7am UTC
+0 7  * * *  appuser  /usr/local/bin/digest-trigger.sh
+
+# Evening digest — 5pm UTC
+0 17 * * *  appuser  /usr/local/bin/digest-trigger.sh
