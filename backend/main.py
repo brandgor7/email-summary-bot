@@ -1,4 +1,13 @@
 import os
+
+import certifi
+
+# Ensure all outbound HTTPS connections (including the Anthropic SDK's internal
+# httpx client) use certifi's CA bundle. Must be set before any SSL context is
+# created, so it goes before all other imports.
+os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+
 from contextlib import asynccontextmanager
 
 import aiosqlite
