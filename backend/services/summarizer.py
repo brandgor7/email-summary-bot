@@ -5,11 +5,17 @@ import logging
 import os
 
 import anthropic
+import certifi
+import httpx
 
 import db
 from services.sources.base import EmailMessage
 
 logger = logging.getLogger(__name__)
+
+_SSL_VERIFY: bool | str = (
+    False if os.getenv("SSL_VERIFY", "true").lower() == "false" else certifi.where()
+)
 
 MODEL = "claude-haiku-4-5-20251001"
 MAX_TOKENS = 2000
@@ -114,7 +120,10 @@ async def summarize(
 
     prompt = build_prompt(user["email"], digest_prefs, emails, truncated=truncated)
 
-    client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    client = anthropic.AsyncAnthropic(
+        api_key=os.getenv("ANTHROPIC_API_KEY"),
+        http_client=httpx.AsyncClient(verify=_SSL_VERIFY),
+    )
     return await _call_with_retry(client, prompt)
 
 
