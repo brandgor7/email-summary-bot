@@ -1,4 +1,21 @@
 import os
+import ssl
+
+import certifi
+
+_ssl_verify_env = os.getenv("SSL_VERIFY", "true").lower()
+_SSL_VERIFY = _ssl_verify_env != "false"
+
+if _SSL_VERIFY:
+    # Use certifi's CA bundle for all outbound SSL connections, including the
+    # Anthropic SDK's internal httpx client which we don't control directly.
+    os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+    os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+else:
+    # SSL_VERIFY=false: disable certificate verification globally.
+    # Intended for development behind a MITM proxy (e.g. corporate SSL inspection).
+    ssl._create_default_https_context = ssl._create_unverified_context  # type: ignore[attr-defined]
+
 from contextlib import asynccontextmanager
 
 import aiosqlite
