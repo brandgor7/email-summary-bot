@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
+import certifi
 import httpx
 
 import db
@@ -55,7 +56,7 @@ class OutlookSource(EmailSource):
         redirect_uri = os.getenv("MS_REDIRECT_URI", "")
 
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(verify=certifi.where()) as client:
                 token_resp = await client.post(
                     f"{_authority(account_type)}/token",
                     data={
@@ -69,7 +70,7 @@ class OutlookSource(EmailSource):
                 token_resp.raise_for_status()
                 token_data = token_resp.json()
 
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(verify=certifi.where()) as client:
                 me_resp = await client.get(
                     f"{_GRAPH_BASE}/me",
                     headers={"Authorization": f"Bearer {token_data['access_token']}"},
@@ -106,7 +107,7 @@ class OutlookSource(EmailSource):
         since_str = since.strftime("%Y-%m-%dT%H:%M:%SZ")
 
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(verify=certifi.where()) as client:
                 resp = await client.get(
                     f"{_GRAPH_BASE}/me/mailFolders/inbox/messages",
                     headers={"Authorization": f"Bearer {access_token}"},
@@ -150,7 +151,7 @@ class OutlookSource(EmailSource):
     async def _refresh_token(self, user_id: str, refresh_token: str, account_type: str = "personal") -> str:
         """Exchange a refresh token for a new access token and persist the updated tokens."""
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(verify=certifi.where()) as client:
                 resp = await client.post(
                     f"{_authority(account_type)}/token",
                     data={

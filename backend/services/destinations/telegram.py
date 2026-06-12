@@ -5,6 +5,7 @@ import os
 import uuid
 from datetime import datetime, timezone
 
+import certifi
 import httpx
 
 import db
@@ -67,7 +68,7 @@ async def send_telegram_message(chat_id: int, text: str) -> None:
     """Send text to a Telegram chat, splitting at 4096 chars if needed."""
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
     parts = _split_message(text)
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(verify=certifi.where()) as client:
         for i, part in enumerate(parts, 1):
             payload: dict = {"chat_id": chat_id, "text": part, "parse_mode": "Markdown"}
             if len(parts) > 1:
