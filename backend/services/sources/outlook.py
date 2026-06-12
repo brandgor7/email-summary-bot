@@ -14,6 +14,10 @@ from services.token_store import decrypt, encrypt
 
 logger = logging.getLogger(__name__)
 
+_SSL_VERIFY: bool | str = (
+    False if os.getenv("SSL_VERIFY", "true").lower() == "false" else certifi.where()
+)
+
 _GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 _SCOPES = "Mail.Read User.Read offline_access"
 
@@ -56,7 +60,7 @@ class OutlookSource(EmailSource):
         redirect_uri = os.getenv("MS_REDIRECT_URI", "")
 
         try:
-            async with httpx.AsyncClient(verify=certifi.where()) as client:
+            async with httpx.AsyncClient(verify=_SSL_VERIFY) as client:
                 token_resp = await client.post(
                     f"{_authority(account_type)}/token",
                     data={
@@ -70,7 +74,7 @@ class OutlookSource(EmailSource):
                 token_resp.raise_for_status()
                 token_data = token_resp.json()
 
-            async with httpx.AsyncClient(verify=certifi.where()) as client:
+            async with httpx.AsyncClient(verify=_SSL_VERIFY) as client:
                 me_resp = await client.get(
                     f"{_GRAPH_BASE}/me",
                     headers={"Authorization": f"Bearer {token_data['access_token']}"},
@@ -107,7 +111,7 @@ class OutlookSource(EmailSource):
         since_str = since.strftime("%Y-%m-%dT%H:%M:%SZ")
 
         try:
-            async with httpx.AsyncClient(verify=certifi.where()) as client:
+            async with httpx.AsyncClient(verify=_SSL_VERIFY) as client:
                 resp = await client.get(
                     f"{_GRAPH_BASE}/me/mailFolders/inbox/messages",
                     headers={"Authorization": f"Bearer {access_token}"},
@@ -151,7 +155,7 @@ class OutlookSource(EmailSource):
     async def _refresh_token(self, user_id: str, refresh_token: str, account_type: str = "personal") -> str:
         """Exchange a refresh token for a new access token and persist the updated tokens."""
         try:
-            async with httpx.AsyncClient(verify=certifi.where()) as client:
+            async with httpx.AsyncClient(verify=_SSL_VERIFY) as client:
                 resp = await client.post(
                     f"{_authority(account_type)}/token",
                     data={
